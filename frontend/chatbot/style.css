@@ -14,20 +14,34 @@
   --shadow-deep: rgba(41, 64, 94, 0.2);
   --overlay: rgba(17, 28, 46, 0.46);
 
-  /* Primary accent — green (your own identity, send action, primary CTA) */
-  --accent: #2f9e64;
-  --accent-strong: #21804f;
-  --accent-soft: rgba(47, 158, 100, 0.14);
+  /* Primary accent — green (route/success color, icon tints) */
+  --accent: #22ab77;
+  --accent-strong: #18885d;
+  --accent-soft: rgba(34, 171, 119, 0.14);
 
-  /* Secondary accent — orange (brand mark, quick prompts, highlights) */
-  --secondary: #e08a2c;
-  --secondary-strong: #c06f18;
-  --secondary-soft: rgba(224, 138, 44, 0.16);
+  /* Secondary accent — orange (route/warning color, icon tints) */
+  --secondary: #f0983d;
+  --secondary-strong: #d97a1f;
+  --secondary-soft: rgba(240, 152, 61, 0.16);
 
-  --success: #21804f;
-  --success-bg: rgba(33, 128, 79, 0.13);
-  --warning: #c06f18;
-  --warning-bg: rgba(192, 111, 24, 0.14);
+  /* Signature brand gradient — green blending through gold into orange,
+     used on the logo mark and primary CTAs (New Chat, Send) so "green and
+     orange" reads as one deliberate blended gradient, not two flat colors
+     sitting next to each other. A warm gold midpoint keeps the transition
+     from turning muddy the way a plain two-stop green→orange gradient can. */
+  --brand-gradient: linear-gradient(135deg, #2fc98a 0%, #f4c15c 55%, #ef9142 100%);
+  --brand-shadow: rgba(217, 138, 42, 0.32);
+
+  /* A calmer blue for "your" messages, so they read distinctly from the
+     brand gradient instead of competing with it — ties back to the light
+     blue base tone too. */
+  --user-color: #3d7fd6;
+  --user-strong: #2f66b3;
+
+  --success: #18885d;
+  --success-bg: rgba(24, 136, 93, 0.13);
+  --warning: #d97a1f;
+  --warning-bg: rgba(217, 122, 31, 0.14);
   --info: #2f7dc0;
   --info-bg: rgba(47, 125, 192, 0.13);
   --danger: #cf3f4b;
@@ -136,8 +150,8 @@ select {
   place-items: center;
   border-radius: 14px;
   color: #ffffff;
-  background: linear-gradient(145deg, #f0a24a, var(--secondary-strong));
-  box-shadow: 0 8px 18px rgba(192, 111, 24, 0.25);
+  background: var(--brand-gradient);
+  box-shadow: 0 8px 18px var(--brand-shadow);
   font-size: 12px;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -170,8 +184,8 @@ select {
   border-radius: 14px;
   cursor: pointer;
   color: #ffffff;
-  background: linear-gradient(145deg, #3cb376, var(--accent-strong));
-  box-shadow: 0 9px 20px rgba(33, 128, 79, 0.24);
+  background: var(--brand-gradient);
+  box-shadow: 0 9px 20px var(--brand-shadow);
   font-size: 13px;
   font-weight: 750;
   transition: filter 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
@@ -179,12 +193,12 @@ select {
 
 .new-chat-button:hover {
   filter: saturate(1.18) brightness(1.04);
-  box-shadow: 0 11px 23px rgba(33, 128, 79, 0.3);
+  box-shadow: 0 11px 23px var(--brand-shadow);
   transform: translateY(-1px);
 }
 
 .new-chat-button:active {
-  box-shadow: 0 4px 10px rgba(33, 128, 79, 0.2);
+  box-shadow: 0 4px 10px var(--brand-shadow);
   transform: translateY(1px);
 }
 
@@ -619,7 +633,7 @@ select {
 
 .quick-prompt:hover {
   color: #ffffff;
-  background: linear-gradient(145deg, #f0a24a, var(--secondary));
+  background: linear-gradient(145deg, #f7b565, var(--secondary-strong));
   transform: translateY(-1px);
 }
 
@@ -658,7 +672,7 @@ select {
 .message.user .avatar {
   order: 2;
   color: #ffffff;
-  background: linear-gradient(145deg, #f0a24a, var(--secondary-strong));
+  background: linear-gradient(145deg, #5b93e0, var(--user-strong));
   box-shadow: 4px 4px 9px var(--shadow-dark);
 }
 
@@ -689,7 +703,7 @@ select {
 .message.user .bubble {
   border-top-right-radius: 5px;
   color: #ffffff;
-  background: linear-gradient(145deg, #f0a24a, var(--secondary));
+  background: linear-gradient(145deg, #5b93e0, var(--user-color));
   box-shadow: 5px 5px 12px var(--shadow-deep);
 }
 
@@ -855,8 +869,8 @@ select {
   border-radius: 14px;
   cursor: pointer;
   color: #ffffff;
-  background: linear-gradient(145deg, #3cb376, var(--accent-strong));
-  box-shadow: 0 8px 18px rgba(33, 128, 79, 0.25);
+  background: var(--brand-gradient);
+  box-shadow: 0 8px 18px var(--brand-shadow);
   transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
@@ -866,7 +880,7 @@ select {
 }
 
 #send-button:active:not(:disabled) {
-  box-shadow: 0 3px 8px rgba(33, 128, 79, 0.2);
+  box-shadow: 0 3px 8px var(--brand-shadow);
   transform: translateY(1px);
 }
 
@@ -1005,6 +1019,10 @@ select {
     --secondary: #f0a24a;
     --secondary-strong: #f5b667;
     --secondary-soft: rgba(240, 162, 74, 0.16);
+    --brand-gradient: linear-gradient(135deg, #35d99a 0%, #f7cd72 55%, #f5a95c 100%);
+    --brand-shadow: rgba(245, 169, 92, 0.3);
+    --user-color: #5b93e0;
+    --user-strong: #7bb2ee;
     --shadow-light: #2b3547;
     --shadow-dark: #0e131c;
     --shadow-deep: rgba(0, 0, 0, 0.34);
