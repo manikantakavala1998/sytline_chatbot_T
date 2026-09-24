@@ -47,6 +47,16 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8001
 
+    redis_host: str = "localhost"
+    redis_port: int = 6379
+    redis_db: int = 0
+
+    # Docker Milvus standalone (+ etcd + MinIO + Attu for browsing the
+    # data visually). Point this at a local file path instead (e.g.
+    # "data/vector_store/milvus.db") to fall back to Milvus Lite with no
+    # containers — pymilvus's MilvusClient supports both via one URI.
+    milvus_uri: str = "http://localhost:19530"
+
 
 try:
     settings = Settings()

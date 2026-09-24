@@ -14,6 +14,12 @@
   (`ConfigGroup=AIDEMO`).
 - This narrows (but does not fully resolve) how the chatbot panel gets embedded and how it
   receives the trusted logged-in session — still `[NEEDS SYTELINE CONFIRMATION]` (see below).
+- Real SyteLine WebClient demo login credentials were given (2026-09-24), stored in `.env` only
+  (never committed — see `.gitignore`): configuration name `AI_DEMO_DALS`, username `manikanta.k`.
+  **This does not by itself resolve any `[NEEDS SYTELINE CONFIRMATION]` item** — knowing a
+  username/password doesn't tell us the actual API surface (REST v2 / ION / Mongoose) the chatbot
+  would need to call, which is still unconfirmed. Useful for a future live-connectivity
+  exploration step (likely alongside Phase 4's SyteLine connector), not wired into any code yet.
 
 ---
 

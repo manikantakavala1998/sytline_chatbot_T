@@ -6,6 +6,13 @@ const historyListEl = document.getElementById("history-list");
 const newChatButtonEl = document.getElementById("new-chat-button");
 const sidebarEl = document.getElementById("sidebar");
 const sidebarToggleEl = document.getElementById("sidebar-toggle");
+const contextToggleEl = document.getElementById("context-toggle");
+const contextPanelEl = document.getElementById("context-panel");
+const contextSummaryEl = document.getElementById("context-summary");
+const ctxGroupEl = document.getElementById("ctx-group");
+const ctxSiteEl = document.getElementById("ctx-site");
+const ctxModuleEl = document.getElementById("ctx-module");
+const ctxFormEl = document.getElementById("ctx-form");
 
 // Relative path on purpose — this page is served by the same FastAPI app
 // it talks to, so it always hits the right host/port with no hardcoding
@@ -26,7 +33,55 @@ const WELCOME_MESSAGE =
 
 const STORAGE_SESSIONS_KEY = "ptc_chat_sessions";
 const STORAGE_ACTIVE_KEY = "ptc_active_session_id";
+const STORAGE_CONTEXT_KEY = "ptc_simulated_context";
 const MAX_SESSIONS = 50;
+
+// ── Context Simulator (mock only — stands in for a real SyteLine screen) ──
+
+function loadSimulatedContext() {
+  try {
+    const raw = localStorage.getItem(STORAGE_CONTEXT_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveSimulatedContext(context) {
+  try {
+    localStorage.setItem(STORAGE_CONTEXT_KEY, JSON.stringify(context));
+  } catch {
+    // ignore — falls back to defaults next load
+  }
+}
+
+function readContextFromInputs() {
+  return {
+    simulated_group: ctxGroupEl.value,
+    site: ctxSiteEl.value.trim() || null,
+    module: ctxModuleEl.value.trim() || null,
+    form: ctxFormEl.value.trim() || null,
+  };
+}
+
+function applyContextToInputs(context) {
+  ctxGroupEl.value = context.simulated_group || "SALES_REP";
+  ctxSiteEl.value = context.site || "";
+  ctxModuleEl.value = context.module || "";
+  ctxFormEl.value = context.form || "";
+}
+
+function updateContextSummary() {
+  const context = readContextFromInputs();
+  const location = [context.site, context.module].filter(Boolean).join(" / ");
+  contextSummaryEl.textContent = location ? `${context.simulated_group} · ${location}` : context.simulated_group;
+}
+
+function onContextChange() {
+  const context = readContextFromInputs();
+  saveSimulatedContext(context);
+  updateContextSummary();
+}
 
 // ── Session storage (client-side only — no backend history yet) ──────
 
@@ -181,6 +236,9 @@ if (!activeSessionId) {
   renderMessages(findSession(sessions, activeSessionId));
 }
 
+applyContextToInputs(loadSimulatedContext());
+updateContextSummary();
+
 // ── Events ─────────────────────────────────────────────────────────
 
 newChatButtonEl.addEventListener("click", createNewSession);
@@ -189,11 +247,25 @@ sidebarToggleEl.addEventListener("click", () => {
   sidebarEl.classList.toggle("collapsed");
 });
 
+contextToggleEl.addEventListener("click", () => {
+  contextPanelEl.classList.toggle("collapsed");
+});
+
+for (const el of [ctxGroupEl, ctxSiteEl, ctxModuleEl, ctxFormEl]) {
+  el.addEventListener("change", onContextChange);
+  el.addEventListener("input", onContextChange);
+}
+
 async function sendQuery(query) {
+  const context = readContextFromInputs();
   const response = await fetch(CHAT_ENDPOINT, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({
+      query,
+      simulated_group: context.simulated_group,
+      context: { site: context.site, module: context.module, form: context.form },
+    }),
   });
 
   if (!response.ok) {
@@ -216,8 +288,13 @@ formEl.addEventListener("submit", async (event) => {
   try {
     const result = await sendQuery(query);
     const meta = { route: result.route, source: result.source, sources: result.sources, score: result.score };
-    renderMessage(result.answer ?? "(no answer)", "bot", meta);
-    appendMessageToActiveSession(result.answer ?? "(no answer)", "bot", meta);
+    const text =
+      result.answer ??
+      (result.route === "BLOCKED"
+        ? `Access denied for this request (reason: ${result.reason || "not permitted"}). Try a different simulated group in the context panel.`
+        : "(no answer)");
+    renderMessage(text, "bot", meta);
+    appendMessageToActiveSession(text, "bot", meta);
   } catch (err) {
     const errorText = "Sorry, something went wrong reaching the server. Please try again.";
     renderMessage(errorText, "bot");

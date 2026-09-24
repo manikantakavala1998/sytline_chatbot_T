@@ -1,5 +1,10 @@
 # Project File Guide
 
+> Living index of every file in this repository: what it is, why it exists, and what it's for.
+> Update this file whenever a new file/folder is added to the project — treat it as mandatory
+> bookkeeping for every future phase, not a one-time document. New entries go under the section
+> matching where the file lives; add new sections as new top-level folders appear.
+
 ---
 
 ## Root files (Phase 1)
@@ -60,13 +65,16 @@ not yet built.
 **What it is**: `/health` and `/api/info` — routes that prove the server is running. More routes
 get added here as each later step builds them (starting with `/chat` next).
 
-### `security/permission_seam.py`
-**What it is**: a stand-in permission check that always says "allowed". Every place that will
-eventually need a real SyteLine permission check already calls through this one function, so
-Phase 2 only has to change what's *inside* this file, not every place that calls it.
+### `security/permission_seam.py` — retired in Phase 2
+Was a stand-in permission check that always said "allowed". Removed once
+`authorization/resolver.py` (below) gave it a real replacement, exactly as planned — Phase 2's
+job was always to swap the mock seam for real plumbing, not add a check for the first time.
 
-**Why it exists**: per `ARCHITECTURE_DECISIONS.md` / `BUILD_ROADMAP.md` Phase 1 — the general
-engine gets built now, but with the security seam already in place, never bolted on after.
+### `security/bootstrap.py`
+**What it is**: Security Bootstrap (master prompt §2.1/§18) — establishes who the current user is
+from their SyteLine session, before anything else runs. No separate chatbot login. Currently
+backed by the mock `session_context.py` (below); raises `InvalidSessionError` on a missing/blank
+session token, which `/chat` turns into a `BLOCKED` response.
 
 ### `models/embeddings.py`
 **What it is**: loads the embedding model (`BAAI/bge-base-en-v1.5`) exactly once and shares it —
@@ -151,11 +159,24 @@ seed. Extracts each chunk's keyword block and builds the synthetic embedding tex
 (`context path + keywords + excerpt`) the same way the Q&A side builds its search text.
 
 ### `milvus_store.py`
-**What it is**: the Milvus Lite vector store for document chunks — runs as a local file
-(`data/vector_store/milvus.db`), no separate Milvus server needed. Confirmed working natively on
-Windows (milvus-lite added Windows support; earlier versions were Linux/macOS-only, which is why
-this was checked before building on top of it). Collection is dropped and rebuilt on every
-startup, same philosophy as the rest of this project's ingestion.
+**What it is**: the Milvus vector store for document chunks. **Switched from Milvus Lite to the
+Docker Milvus standalone stack (2026-09-24)** so vectors can actually be browsed visually via
+Attu (`http://localhost:3000`) — Lite has no UI, it's just an opaque local file, which defeated
+the point once the user wanted to see how vectors are stored. Connects via `MILVUS_URI` in `.env`
+(default `http://localhost:19530`); point that at a local file path instead to fall back to
+Lite (confirmed working natively on Windows earlier, kept as a documented option, e.g. for a
+machine without Docker). Collection is dropped and rebuilt on every startup, same as the rest of
+this project's ingestion.
+
+**Important**: the Docker containers in use (`milvus`, `etcd`, `minio`, `attu`) belong to a
+docker-compose project called `deepchatbot`, living in a *different* project
+(`PycharmProjects/DeepChatbot/docker-compose.yml`) — the prior HR chatbot `REPLICA_BUILD_PROMPT.md`
+was reverse-engineered from. This is **shared infrastructure, not dedicated to this project**:
+our data lives in its own `markdown_chunks` collection (won't collide with that project's
+`knowledge_base_*` collections), but stopping/restarting these containers affects that other
+project too. Worth giving this SyteLine project its own dedicated `docker-compose.yml` (different
+container names/ports) before this goes anywhere near production — noted here rather than solved,
+since reusing the existing stack was the fast path to answer "let me see the vectors" right now.
 
 ### `reranker.py`
 **What it is**: the cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, master prompt
@@ -184,7 +205,50 @@ which it does.
 
 ---
 
-## `frontend/chatbot/` (Phase 1)
+## `backend/app/integrations/syteline/`, `authorization/`, `context/` (Phase 2)
+
+Real SyteLine identity, session, and dynamic permissions — per `BUILD_ROADMAP.md` Phase 2. Most
+of master prompt §73's `[NEEDS SYTELINE CONFIRMATION]` items are still open (we don't yet know the
+real session-bridging mechanism or permission APIs), so these modules are built with the real
+*shape* and *logic* the master prompt describes, backed by clearly-labeled mock data — swapping
+the mock for real SyteLine access later only touches the specific file noted below, not any
+caller.
+
+### `integrations/syteline/session_context.py`
+**What it is**: the mock stand-in for SyteLine's session/security APIs —
+`get_logged_in_user()`, `validate_session()`, `get_configuration()`, `get_current_site()`. Returns
+one of three test users/groups (`SALES_REP`, `AR_CLERK`, `NO_ACCESS`) depending on which the
+frontend's Context Simulator picked, so permission allow/deny can actually be exercised and
+demonstrated, not just always-allow like the retired Phase 1 seam.
+
+**What's real vs. mock**: real SyteLine WebClient demo credentials were given by the user for
+testing (2026-09-24), stored in `.env` only (`SYTELINE_LOGIN_URL` / `SYTELINE_CONFIGURATION_NAME`
+/ `SYTELINE_USERNAME` / `SYTELINE_PASSWORD`) — **not yet read by any code**. Having credentials
+doesn't by itself answer *how* the chatbot would authenticate against SyteLine's actual API
+surface (REST v2 / ION / Mongoose — still unconfirmed, §73 items 17). Wiring them in is later
+work, likely Phase 4 (SyteLine connector) or a dedicated exploration step.
+
+### `authorization/resolver.py`
+**What it is**: the Dynamic Permission Resolver (master prompt §19) — real group-lookup logic and
+real short-lived Redis caching (30s TTL), with a mock permission table
+(`MOCK_GROUP_PERMISSIONS`). Confirmed a real Redis container was already running locally (Docker,
+port 6379) before building this, same diligence as the earlier Milvus-on-Windows check. Fails open
+on a Redis connection error (skips the cache, resolves fresh) — that's just a performance
+degradation, not a security bypass, since the underlying resolve logic doesn't depend on Redis.
+
+### `context/manager.py`
+**What it is**: builds one normalized `RequestContext` per turn (master prompt §20) — user
+identity, groups, configuration/site, and whatever screen/field/record context the frontend sent.
+Everything downstream reads this one object instead of raw session/UI data.
+
+### `security/bootstrap.py`
+**What it is**: Security Bootstrap (master prompt §2.1/§18) — establishes who the current user is
+before anything else runs; no separate chatbot login. Raises `InvalidSessionError` on a missing
+session token, which `/chat` turns into a `BLOCKED` response.
+
+---
+
+## `frontend/chatbot/` (Phase 1, extended in Phase 2)
 
 ### `index.html` / `style.css` / `script.js`
 **What it is**: the chat page — plain HTML/CSS/JS, no build step, no framework (matches the
@@ -207,20 +271,21 @@ page is served by the same FastAPI app it talks to, a relative path always hits 
 host/port automatically — that whole class of bug can't happen here.
 
 **Purpose going forward**: this is the Phase 1 "does it actually work" UI — just a chat box. Later
-phases add the role/context awareness, source citations, confidence display, and escalation
-button the master prompt describes for the full frontend (§13).
+phases add source citations (done — see below), confidence display, and the escalation button the
+master prompt describes for the full frontend (§13).
+
+**Phase 2 addition — Context Simulator**: a collapsible panel (gear icon in the header) with a
+simulated user-group dropdown (`SALES_REP` / `AR_CLERK` / `NO_ACCESS`) and Site/Module/Form text
+fields, sent with every `/chat` request and persisted in `localStorage`
+(`ptc_simulated_context`). Stands in for master prompt §3's real Context Bridge, which would read
+this automatically from the actual SyteLine screen — not possible yet since there's no live
+embedding, so this lets permissions and context flow through the pipeline be tested and
+demonstrated now. The header badge next to it shows the current simulated identity at a glance.
 
 ### `main.py` (updated)
 Now also mounts `frontend/chatbot/` as static files at `/`, registered *after* the API router so
 `/chat`, `/health`, `/api/info` are matched first — only requests those don't handle fall through
 to serving the page/CSS/JS.
-
----
-
-> Living index of every file in this repository: what it is, why it exists, and what it's for.
-> Update this file whenever a new file/folder is added to the project — treat it as mandatory
-> bookkeeping for every future phase, not a one-time document. New entries go under the section
-> matching where the file lives; add new sections as new top-level folders appear.
 
 ---
 

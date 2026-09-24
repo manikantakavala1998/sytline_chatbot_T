@@ -1,16 +1,19 @@
 """
-Milvus Lite vector store for Markdown RAG chunks — runs locally as a plain
-file, no separate Milvus server needed (master prompt section 16). The
-collection is dropped and recreated on every startup, same as the rest of
-this project's ingestion (editing content + restarting is the whole
-content-update workflow).
+Milvus vector store for Markdown RAG chunks (master prompt section 16).
+Connects to the Docker Milvus standalone stack (+ etcd + MinIO) by
+default, with Attu (http://localhost:3000) available to browse
+collections and inspect stored vectors visually — the whole reason to
+run the Docker path instead of the simpler, container-free Milvus Lite.
+Point MILVUS_URI at a local file path instead to fall back to Lite; the
+MilvusClient API is identical either way. The collection is dropped and
+recreated on every startup, same as the rest of this project's ingestion
+(editing content + restarting is the whole content-update workflow).
 """
 
 from pymilvus import DataType, MilvusClient
 
-from backend.app.config import BASE_DIR, settings
+from backend.app.config import settings
 
-DB_PATH = BASE_DIR / "data" / "vector_store" / "milvus.db"
 COLLECTION_NAME = "markdown_chunks"
 
 OUTPUT_FIELDS = [
@@ -24,8 +27,7 @@ _client: MilvusClient | None = None
 def get_client() -> MilvusClient:
     global _client
     if _client is None:
-        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _client = MilvusClient(str(DB_PATH))
+        _client = MilvusClient(settings.milvus_uri)
     return _client
 
 
