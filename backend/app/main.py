@@ -7,9 +7,13 @@ for the embedding model to load.
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes import router
+from backend.app.config import BASE_DIR
 from backend.app.qa.retriever import get_qa_index
+
+FRONTEND_DIR = BASE_DIR / "frontend" / "chatbot"
 
 
 @asynccontextmanager
@@ -25,3 +29,7 @@ app = FastAPI(
 )
 
 app.include_router(router)
+
+# Mounted last and at "/" so it only catches requests the API router above
+# didn't already handle (StaticFiles(html=True) serves index.html at "/").
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

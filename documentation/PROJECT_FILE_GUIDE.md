@@ -128,6 +128,39 @@ or edit the `.xlsx` files directly once real content replaces the placeholders.
 
 ---
 
+## `frontend/chatbot/` (Phase 1)
+
+### `index.html` / `style.css` / `script.js`
+**What it is**: the chat page — plain HTML/CSS/JS, no build step, no framework (matches the
+replica project's approach). Styled with neumorphism (soft, single-background-color panels with
+light/dark dual shadows instead of borders), per the user's explicit request at the start of this
+project. Served directly by the backend at `/` (see `main.py` below), so there's no separate
+frontend server or port to keep in sync.
+
+Layout is a sidebar (New Chat button + a history list) plus the main chat column — the standard
+chat-app pattern, and what the replica project's own frontend spec (§13) described. **History is
+client-side only right now** (saved in the browser's `localStorage`, capped at 50 conversations,
+collapsed into a `ptc_chat_sessions` / `ptc_active_session_id` pair of keys) — there is no
+backend conversation storage yet, so history won't follow you to another device or browser. Real
+server-side session/history storage is a later phase (master prompt §10.2 History Manager /
+§20 Context Manager), not built yet.
+
+**Why `script.js` calls `/chat` with a relative path, not a full URL**: the replica project had a
+real bug where the frontend hardcoded one port while a deployment script used another. Since this
+page is served by the same FastAPI app it talks to, a relative path always hits the right
+host/port automatically — that whole class of bug can't happen here.
+
+**Purpose going forward**: this is the Phase 1 "does it actually work" UI — just a chat box. Later
+phases add the role/context awareness, source citations, confidence display, and escalation
+button the master prompt describes for the full frontend (§13).
+
+### `main.py` (updated)
+Now also mounts `frontend/chatbot/` as static files at `/`, registered *after* the API router so
+`/chat`, `/health`, `/api/info` are matched first — only requests those don't handle fall through
+to serving the page/CSS/JS.
+
+---
+
 > Living index of every file in this repository: what it is, why it exists, and what it's for.
 > Update this file whenever a new file/folder is added to the project — treat it as mandatory
 > bookkeeping for every future phase, not a one-time document. New entries go under the section

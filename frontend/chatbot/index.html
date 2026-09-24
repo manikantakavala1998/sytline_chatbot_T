@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SyteLine Prospect-to-Cash Assistant</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar" id="sidebar">
+      <button id="new-chat-button" class="new-chat-button">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
+          <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        New Chat
+      </button>
+
+      <div class="sidebar-label">History</div>
+      <div id="history-list" class="history-list"></div>
+    </aside>
+
+    <div class="main-column">
+      <header class="app-header">
+        <button id="sidebar-toggle" class="icon-button" aria-label="Toggle history">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+            <path d="M4 6h16M4 12h16M4 18h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <div class="brand">
+          <span class="brand-dot"></span>
+          <h1>Prospect-to-Cash Assistant</h1>
+        </div>
+        <span class="badge">Phase 1 &middot; Fast Q&amp;A only</span>
+      </header>
+
+      <main class="chat-card">
+        <div id="messages" class="messages">
+          <div class="message bot">
+            <div class="bubble">
+              Hi! Ask me anything about the Prospect-to-Cash process — Prospects, Leads,
+              Opportunities, Quotations, Customer Orders, Credit, Shipments, Invoices, or Payments.
+            </div>
+          </div>
+        </div>
+
+        <form id="chat-form" class="input-bar">
+          <input
+            id="chat-input"
+            type="text"
+            placeholder="Ask a question, e.g. What is a Customer Order?"
+            autocomplete="off"
+            maxlength="1000"
+          />
+          <button type="submit" id="send-button" aria-label="Send">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+              <path d="M4 12h15M13 6l7 6-7 6" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
+        </form>
+      </main>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
