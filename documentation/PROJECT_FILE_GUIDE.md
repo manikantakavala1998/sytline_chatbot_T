@@ -119,6 +119,14 @@ the master prompt insists these come from real evaluation later, not a guess.
 ### `api/models.py`
 **What it is**: the `ChatRequest`/`ChatResponse` shapes for the `/chat` endpoint.
 
+### `utils/logger.py`
+**What it is**: a shared logger so ingestion actually prints what it's doing to the terminal.
+Added because startup used to jump straight from "Waiting for application startup" to
+"Application startup complete" with zero visibility — the user asked why they couldn't see files
+being ingested into Milvus, and the honest answer was that nothing logged it. Now every ingestion
+step (each Q&A/Markdown file as it's read, embedding calls, the Milvus connect/rebuild/insert
+sequence, BM25 index builds) prints a line via `get_logger(__name__)`.
+
 ---
 
 ## `data/` (Phase 1)
