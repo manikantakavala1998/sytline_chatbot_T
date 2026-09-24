@@ -1,6 +1,7 @@
 # ── Core RAG (search + AI answers) ──────────────────────────
 sentence-transformers==2.7.0
 pymilvus
+milvus-lite
 rank-bm25
 openai
 

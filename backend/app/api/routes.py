@@ -1,6 +1,8 @@
 """
-Basic routes to prove the server is alive. The real /chat endpoint gets
-added in the next Phase 1 step, once the Q&A + Markdown search engine exists.
+API routes. /chat tries Fast Q&A first (Source A); only if that's not a
+confident match does it fall through to Markdown RAG (Source B) — the two
+stay separate routes per the master prompt (section 8-9, section 26), Fast
+Q&A tried first for speed and lower hallucination risk.
 """
 
 from fastapi import APIRouter
@@ -8,6 +10,8 @@ from fastapi import APIRouter
 from backend.app.api.models import ChatRequest, ChatResponse
 from backend.app.config import settings
 from backend.app.qa.retriever import get_qa_index
+from backend.app.rag.answer_service import generate_answer
+from backend.app.rag.retriever import get_rag_index
 from backend.app.security.permission_seam import check_permission
 
 router = APIRouter()
@@ -52,10 +56,21 @@ async def chat(request: ChatRequest) -> ChatResponse:
             score=match.score,
         )
 
-    # MARKDOWN_RAG — document search isn't built yet, that's the next step
+    # MARKDOWN_RAG — Fast Q&A had nothing confident, try the deeper document search
+    rag_result = get_rag_index().search(request.query)
+
+    if not rag_result.has_evidence:
+        return ChatResponse(
+            route="NO_ANSWER",
+            answer="I don't have information about that yet. Please contact the support team for help.",
+            score=match.score,
+        )
+
+    answer = generate_answer(request.query, rag_result.chunks)
+    sources = [f"{c.source_file} — {c.full_context_path}" for c in rag_result.chunks]
     return ChatResponse(
-        route=match.route,
-        answer="I don't have a quick answer for that yet. Deeper document search isn't built yet in this project — that's the next step.",
-        source=None,
-        score=match.score,
+        route="MARKDOWN_RAG_RESPONSE",
+        answer=answer,
+        sources=sources,
+        score=rag_result.scores[0] if rag_result.scores else 0.0,
     )

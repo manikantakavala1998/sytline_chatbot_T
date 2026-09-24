@@ -126,6 +126,62 @@ that only approved content may be ingested.
 14 files from the `LEVELS` dict inside it (it overwrites them). Add more dummy/starter rows here,
 or edit the `.xlsx` files directly once real content replaces the placeholders.
 
+### `data/knowledge/prospect_to_cash/*.md`
+**What it is**: dummy Markdown knowledge docs (`customer_order.md`, `credit.md`, `shipment.md`,
+`invoice.md`, `faq.md`) — the deeper content Fast Q&A can't answer (troubleshooting, business
+rules and their exceptions, multi-step processes). Written with real heading hierarchy, a
+`### Keywords` block, and a `**Section Summary:**` line per section — the authoring convention
+the chunker is built around (see `rag/markdown_processor.py`).
+
+**Content rule worth knowing**: a line like `A. Do this` (single capital letter + period) is
+treated as its own sub-heading by the chunker, not a list item — use numbered (`1.`) or bulleted
+(`-`) lists for ordinary step-by-step content instead, or each step becomes its own tiny,
+oddly-tagged chunk. Found and fixed this exact mistake while testing — see the "moved to
+numbered lists" edit in this project's git history.
+
+---
+
+## `backend/app/rag/` (Phase 1 — Markdown RAG, Source B)
+
+### `markdown_processor.py`
+**What it is**: the heading-aware chunker (master prompt §14, replica pattern §6.2) — walks a
+document line by line, splits on any heading (except a "Keywords" heading, which gets absorbed
+into the current chunk), and also splits long sections at ~1200 characters with a 3-line overlap
+seed. Extracts each chunk's keyword block and builds the synthetic embedding text
+(`context path + keywords + excerpt`) the same way the Q&A side builds its search text.
+
+### `milvus_store.py`
+**What it is**: the Milvus Lite vector store for document chunks — runs as a local file
+(`data/vector_store/milvus.db`), no separate Milvus server needed. Confirmed working natively on
+Windows (milvus-lite added Windows support; earlier versions were Linux/macOS-only, which is why
+this was checked before building on top of it). Collection is dropped and rebuilt on every
+startup, same philosophy as the rest of this project's ingestion.
+
+### `reranker.py`
+**What it is**: the cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, master prompt
+§31) — scores each (query, chunk) pair directly for a more accurate relevance signal than
+embedding similarity alone, run only on the already-narrowed candidate pool.
+
+### `retriever.py`
+**What it is**: the actual Markdown RAG pipeline (master prompt §27) — vector search + BM25 in
+parallel, Reciprocal Rank Fusion to combine them, cross-encoder rerank, an evidence-sufficiency
+gate (starter threshold, tested against this project's own dummy data — not a benchmarked
+number), and simple contextual compression (caps total context by character budget, keeps only
+chunks that clear the relevance bar rather than blindly keeping the top 5 regardless of score).
+
+**Known limitation (found while testing, not fixed yet on purpose)**: some troubleshooting-style
+questions ("why won't my order release") still get intercepted by Fast Q&A with a related-but-not-
+quite-right answer (e.g. the "what is a Customer Order" definition), because Phase 1 has no intent
+classifier yet to tell "define X" apart from "how do I fix X." That's Phase 3's job (Scope/Intent
+Classification, per `BUILD_ROADMAP.md`) — expected at this stage, not a bug to chase down now.
+
+### `answer_service.py`
+**What it is**: calls the primary LLM to generate a grounded, cited answer from the retrieved
+chunks (master prompt §34) — a deliberately simplified version of the full answer-generation
+prompt. Role-aware tone and RBAC scope enforcement (the replica pattern's big system prompt) land
+in Phase 5 per the roadmap; this only needs to prove grounded, cited answers work end to end,
+which it does.
+
 ---
 
 ## `frontend/chatbot/` (Phase 1)

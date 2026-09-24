@@ -13,9 +13,10 @@ const sidebarToggleEl = document.getElementById("sidebar-toggle");
 const CHAT_ENDPOINT = "/chat";
 
 const ROUTE_LABELS = {
-  FAST_QA_RESPONSE: null, // confident answer, no extra label needed
+  FAST_QA_RESPONSE: null, // confident quick answer, no extra label needed
   CLARIFY: "Needs clarification",
-  MARKDOWN_RAG: "No quick answer yet",
+  MARKDOWN_RAG_RESPONSE: "From document search",
+  NO_ANSWER: "No information found",
   BLOCKED: "Blocked",
 };
 
@@ -81,7 +82,7 @@ function renderMessages(session) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-function renderMessage(text, sender, { route, source, score } = {}) {
+function renderMessage(text, sender, { route, source, sources, score } = {}) {
   const row = document.createElement("div");
   row.className = `message ${sender}`;
 
@@ -90,12 +91,13 @@ function renderMessage(text, sender, { route, source, score } = {}) {
   bubble.textContent = text;
 
   const label = ROUTE_LABELS[route];
-  if (sender === "bot" && (label || source)) {
+  const citation = source || (sources && sources.length ? sources.join("; ") : null);
+  if (sender === "bot" && (label || citation)) {
     const meta = document.createElement("span");
     meta.className = "meta";
     const parts = [];
     if (label) parts.push(label);
-    if (source) parts.push(`source: ${source}`);
+    if (citation) parts.push(`source: ${citation}`);
     if (typeof score === "number") parts.push(`score: ${score.toFixed(2)}`);
     meta.textContent = parts.join(" · ");
     bubble.appendChild(meta);
@@ -213,7 +215,7 @@ formEl.addEventListener("submit", async (event) => {
 
   try {
     const result = await sendQuery(query);
-    const meta = { route: result.route, source: result.source, score: result.score };
+    const meta = { route: result.route, source: result.source, sources: result.sources, score: result.score };
     renderMessage(result.answer ?? "(no answer)", "bot", meta);
     appendMessageToActiveSession(result.answer ?? "(no answer)", "bot", meta);
   } catch (err) {

@@ -1,7 +1,8 @@
 """
-FastAPI app entry point. The Q&A search index is built once at startup
-(not on the first request) so the first real user isn't the one waiting
-for the embedding model to load.
+FastAPI app entry point. Both search indexes (Fast Q&A and Markdown RAG)
+are built once at startup, not on the first request, so the first real
+user isn't the one waiting for the embedding/reranker models to load and
+the documents to be chunked and indexed into Milvus.
 """
 
 from contextlib import asynccontextmanager
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.api.routes import router
 from backend.app.config import BASE_DIR
 from backend.app.qa.retriever import get_qa_index
+from backend.app.rag.retriever import get_rag_index
 
 FRONTEND_DIR = BASE_DIR / "frontend" / "chatbot"
 
@@ -19,6 +21,7 @@ FRONTEND_DIR = BASE_DIR / "frontend" / "chatbot"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     get_qa_index()
+    get_rag_index()
     yield
 
 

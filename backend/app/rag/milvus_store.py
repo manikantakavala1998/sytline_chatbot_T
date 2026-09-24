@@ -1,0 +1,68 @@
+"""
+Milvus Lite vector store for Markdown RAG chunks — runs locally as a plain
+file, no separate Milvus server needed (master prompt section 16). The
+collection is dropped and recreated on every startup, same as the rest of
+this project's ingestion (editing content + restarting is the whole
+content-update workflow).
+"""
+
+from pymilvus import DataType, MilvusClient
+
+from backend.app.config import BASE_DIR, settings
+
+DB_PATH = BASE_DIR / "data" / "vector_store" / "milvus.db"
+COLLECTION_NAME = "markdown_chunks"
+
+OUTPUT_FIELDS = [
+    "chunk_id", "document_id", "text", "level",
+    "full_context_path", "source_file", "chunk_index", "total_chunks",
+]
+
+_client: MilvusClient | None = None
+
+
+def get_client() -> MilvusClient:
+    global _client
+    if _client is None:
+        DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _client = MilvusClient(str(DB_PATH))
+    return _client
+
+
+def reset_collection() -> None:
+    client = get_client()
+    if client.has_collection(COLLECTION_NAME):
+        client.drop_collection(COLLECTION_NAME)
+
+    schema = client.create_schema(auto_id=False, enable_dynamic_field=True)
+    schema.add_field("id", DataType.VARCHAR, is_primary=True, max_length=100)
+    schema.add_field("vector", DataType.FLOAT_VECTOR, dim=settings.embedding_dim)
+
+    index_params = client.prepare_index_params()
+    # AUTOINDEX picks a reasonable default for Milvus Lite. Swap for tuned
+    # HNSW params (M / efConstruction) once there's real data to benchmark
+    # against — master prompt section 16 is explicit not to guess these.
+    index_params.add_index(field_name="vector", index_type="AUTOINDEX", metric_type="IP")
+
+    client.create_collection(collection_name=COLLECTION_NAME, schema=schema, index_params=index_params)
+
+
+def insert_rows(rows: list[dict]) -> None:
+    if not rows:
+        return
+    get_client().insert(collection_name=COLLECTION_NAME, data=rows)
+
+
+def search(query_vector: list[float], top_k: int) -> list[dict]:
+    client = get_client()
+    if not client.has_collection(COLLECTION_NAME):
+        return []
+
+    results = client.search(
+        collection_name=COLLECTION_NAME,
+        data=[query_vector],
+        limit=top_k,
+        output_fields=OUTPUT_FIELDS,
+    )
+    hits = results[0] if results else []
+    return [{**hit["entity"], "vector_score": hit["distance"]} for hit in hits]
