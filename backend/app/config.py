@@ -7,6 +7,7 @@ failing later in the middle of a chat request.
 import sys
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -27,6 +28,13 @@ class Settings(BaseSettings):
     )
 
     openai_api_key: str
+
+    @field_validator("openai_api_key")
+    @classmethod
+    def openai_api_key_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("OPENAI_API_KEY is blank — paste your real key into .env")
+        return value
 
     primary_llm: str = "gpt-4.1"
     orchestrator_model: str = "gpt-4.1-mini"
