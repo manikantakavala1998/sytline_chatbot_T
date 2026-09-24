@@ -14,14 +14,19 @@ from backend.app.api.routes import router
 from backend.app.config import BASE_DIR
 from backend.app.qa.retriever import get_qa_index
 from backend.app.rag.retriever import get_rag_index
+from backend.app.utils.logger import get_logger
 
 FRONTEND_DIR = BASE_DIR / "frontend" / "chatbot"
+
+logger = get_logger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("=== Startup: ingesting Fast Q&A + Markdown RAG data ===")
     get_qa_index()
     get_rag_index()
+    logger.info("=== Startup complete: both indexes ready, server accepting requests ===")
     yield
 
 

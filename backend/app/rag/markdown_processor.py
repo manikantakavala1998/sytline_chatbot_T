@@ -21,6 +21,10 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from backend.app.utils.logger import get_logger
+
+logger = get_logger(__name__)
+
 MARKDOWN_CHUNK_SIZE = 1200
 MIN_CHUNK_CHARS = 20
 KEYWORD_LINES_MAX = 4
@@ -184,9 +188,17 @@ def process_markdown_file(path: Path) -> list[MarkdownChunk]:
 
 def process_all_markdown(root: Path) -> list[MarkdownChunk]:
     if not root.exists():
+        logger.info("Knowledge folder %s does not exist yet — skipping Markdown ingestion", root)
         return []
 
+    files = sorted(root.glob("*.md"))
+    logger.info("Ingesting Markdown knowledge base: found %d file(s) in %s", len(files), root)
+
     chunks: list[MarkdownChunk] = []
-    for md_file in sorted(root.glob("*.md")):
-        chunks.extend(process_markdown_file(md_file))
+    for md_file in files:
+        file_chunks = process_markdown_file(md_file)
+        logger.info("  %-24s -> %d chunk(s)", md_file.name, len(file_chunks))
+        chunks.extend(file_chunks)
+
+    logger.info("Markdown chunking complete: %d total chunk(s) from %d file(s)", len(chunks), len(files))
     return chunks

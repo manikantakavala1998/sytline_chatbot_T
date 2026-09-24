@@ -24,6 +24,9 @@ from rank_bm25 import BM25Okapi
 from backend.app.models.embeddings import embed, embed_query
 from backend.app.qa.glossary import GlossaryEntry, expand_query, load_glossary
 from backend.app.qa.loader import QARecord, load_qa_records
+from backend.app.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 STRONG_MATCH_THRESHOLD = 0.80
 WEAK_MATCH_THRESHOLD = 0.45
@@ -62,9 +65,11 @@ class QAIndex:
                 self._entry_records.append(record)
                 self._entry_texts.append(text)
 
+        logger.info("Embedding %d Fast Q&A search entr(y/ies) ...", len(self._entry_texts))
         tokenized_corpus = [_tokenize(t) for t in self._entry_texts]
         self._bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
         self._entry_embeddings = embed(self._entry_texts)
+        logger.info("Fast Q&A index ready.")
 
     def search(self, raw_query: str) -> QAMatch:
         if not self.records:

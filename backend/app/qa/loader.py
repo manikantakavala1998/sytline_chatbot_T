@@ -17,8 +17,11 @@ from pathlib import Path
 import pandas as pd
 
 from backend.app.config import BASE_DIR
+from backend.app.utils.logger import get_logger
 
 QA_ROOT = BASE_DIR / "data" / "qa" / "prospect_to_cash"
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -75,10 +78,16 @@ def _load_one_file(path: Path, level: str) -> list[QARecord]:
 
 def load_qa_records(root: Path = QA_ROOT) -> list[QARecord]:
     if not root.exists():
+        logger.info("Q&A folder %s does not exist yet — skipping Fast Q&A ingestion", root)
         return []
 
     records: list[QARecord] = []
-    for qa_file in sorted(root.glob("*.xlsx")):
+    files = sorted(root.glob("*.xlsx"))
+    logger.info("Ingesting Fast Q&A: found %d level file(s) in %s", len(files), root)
+    for qa_file in files:
         level = qa_file.stem
-        records.extend(_load_one_file(qa_file, level))
+        level_records = _load_one_file(qa_file, level)
+        logger.info("  %-24s -> %d approved+active row(s)", qa_file.name, len(level_records))
+        records.extend(level_records)
+    logger.info("Fast Q&A ingestion complete: %d total records", len(records))
     return records

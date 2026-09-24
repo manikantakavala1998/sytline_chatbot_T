@@ -15,13 +15,16 @@ from dataclasses import dataclass
 
 from rank_bm25 import BM25Okapi
 
-from backend.app.config import BASE_DIR
+from backend.app.config import BASE_DIR, settings
 from backend.app.models.embeddings import embed, embed_query
 from backend.app.rag import milvus_store
 from backend.app.rag.markdown_processor import MarkdownChunk, process_all_markdown
 from backend.app.rag.reranker import rerank
+from backend.app.utils.logger import get_logger
 
 KNOWLEDGE_ROOT = BASE_DIR / "data" / "knowledge" / "prospect_to_cash"
+
+logger = get_logger(__name__)
 
 TOP_K_HYBRID = 10
 TOP_K_RERANKED = 5
@@ -59,8 +62,12 @@ class RagIndex:
         self.chunks: list[MarkdownChunk] = process_all_markdown(KNOWLEDGE_ROOT)
         self._chunks_by_id = {c.chunk_id: c for c in self.chunks}
 
+        logger.info("Connecting to Milvus at %s ...", settings.milvus_uri)
         milvus_store.reset_collection()
+        logger.info("Milvus collection '%s' created (dropped + recreated fresh)", milvus_store.COLLECTION_NAME)
+
         if self.chunks:
+            logger.info("Embedding %d chunk(s) with %s ...", len(self.chunks), settings.embedding_model)
             embeddings = embed([c.embed_text for c in self.chunks])
             rows = [
                 {
@@ -77,10 +84,16 @@ class RagIndex:
                 }
                 for i, c in enumerate(self.chunks)
             ]
+            logger.info("Inserting %d vector(s) into Milvus ...", len(rows))
             milvus_store.insert_rows(rows)
+            logger.info("Milvus insert complete: %d vector(s) stored in '%s'", len(rows), milvus_store.COLLECTION_NAME)
+        else:
+            logger.info("No Markdown chunks to embed — Milvus collection left empty")
 
+        logger.info("Building BM25 keyword index over %d chunk(s) ...", len(self.chunks))
         tokenized_corpus = [_tokenize(c.embed_text) for c in self.chunks]
         self._bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
+        logger.info("Markdown RAG index ready.")
 
     def search(self, query: str) -> RagResult:
         if not self.chunks or self._bm25 is None:
