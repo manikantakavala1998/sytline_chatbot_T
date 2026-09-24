@@ -47,15 +47,20 @@ class Settings(BaseSettings):
     api_host: str = "0.0.0.0"
     api_port: int = 8001
 
+    # Ports match this project's own docker-compose.yml (ptc-redis), not
+    # the default Redis port — kept different on purpose so this project
+    # never collides with some other Redis container on the same machine.
     redis_host: str = "localhost"
-    redis_port: int = 6379
+    redis_port: int = 6380
     redis_db: int = 0
 
     # Docker Milvus standalone (+ etcd + MinIO + Attu for browsing the
-    # data visually). Point this at a local file path instead (e.g.
+    # data visually) — ptc-milvus from this project's own docker-compose.yml,
+    # on a non-default port for the same isolation reason as Redis above.
+    # Point this at a local file path instead (e.g.
     # "data/vector_store/milvus.db") to fall back to Milvus Lite with no
     # containers — pymilvus's MilvusClient supports both via one URI.
-    milvus_uri: str = "http://localhost:19530"
+    milvus_uri: str = "http://localhost:19531"
 
 
 try:

@@ -48,6 +48,19 @@ without exposing real secrets.
 **Why it exists**: matches the pattern from `REPLICA_BUILD_PROMPT.md` (a single entry point that
 starts uvicorn), so starting the app doesn't require remembering a long uvicorn command.
 
+### `docker-compose.yml`
+**What it is**: this project's own dedicated infrastructure (master prompt §14) — Milvus
+standalone + etcd + MinIO + Attu, plus Redis, all named `ptc-*` and running on non-default host
+ports (Milvus client `19531`, Attu `3001`, Redis `6380`, MinIO `19000`/`19001`) so this project
+never shares state or collides with any other project's containers on the same machine. Compose
+project name is `ptc-chatbot`. Start with `docker compose up -d`, browse vectors at
+`http://localhost:3001` (Attu) once `ptc-milvus` reports healthy.
+
+**Why it exists**: initially reused an already-running Milvus from a different, older project
+(`PycharmProjects/DeepChatbot/`) to answer "let me see the vectors" quickly — the user then
+explicitly asked for full separation, so this dedicated stack replaced that the same day
+(2026-09-24). `backend/app/config.py`'s `milvus_uri`/`redis_port` defaults point here.
+
 ---
 
 ## `backend/app/` (Phase 1 — foundation)
@@ -159,24 +172,21 @@ seed. Extracts each chunk's keyword block and builds the synthetic embedding tex
 (`context path + keywords + excerpt`) the same way the Q&A side builds its search text.
 
 ### `milvus_store.py`
-**What it is**: the Milvus vector store for document chunks. **Switched from Milvus Lite to the
+**What it is**: the Milvus vector store for document chunks. **Switched from Milvus Lite to a
 Docker Milvus standalone stack (2026-09-24)** so vectors can actually be browsed visually via
-Attu (`http://localhost:3000`) — Lite has no UI, it's just an opaque local file, which defeated
-the point once the user wanted to see how vectors are stored. Connects via `MILVUS_URI` in `.env`
-(default `http://localhost:19530`); point that at a local file path instead to fall back to
-Lite (confirmed working natively on Windows earlier, kept as a documented option, e.g. for a
-machine without Docker). Collection is dropped and rebuilt on every startup, same as the rest of
-this project's ingestion.
+Attu — Lite has no UI, it's just an opaque local file, which defeated the point once the user
+wanted to see how vectors are stored. Connects via `MILVUS_URI` in `.env`
+(`http://localhost:19531`); point that at a local file path instead to fall back to Lite
+(confirmed working natively on Windows earlier, kept as a documented option, e.g. for a machine
+without Docker). Collection is dropped and rebuilt on every startup, same as the rest of this
+project's ingestion.
 
-**Important**: the Docker containers in use (`milvus`, `etcd`, `minio`, `attu`) belong to a
-docker-compose project called `deepchatbot`, living in a *different* project
-(`PycharmProjects/DeepChatbot/docker-compose.yml`) — the prior HR chatbot `REPLICA_BUILD_PROMPT.md`
-was reverse-engineered from. This is **shared infrastructure, not dedicated to this project**:
-our data lives in its own `markdown_chunks` collection (won't collide with that project's
-`knowledge_base_*` collections), but stopping/restarting these containers affects that other
-project too. Worth giving this SyteLine project its own dedicated `docker-compose.yml` (different
-container names/ports) before this goes anywhere near production — noted here rather than solved,
-since reusing the existing stack was the fast path to answer "let me see the vectors" right now.
+**This project's Docker stack is fully separate from anything else on the machine** — first tried
+reusing an already-running Milvus from a different, older project (`PycharmProjects/DeepChatbot/`),
+but the user explicitly asked for full separation, so that was replaced the same day with this
+project's own dedicated `docker-compose.yml` (see below): different container names (`ptc-*`
+prefix), different host ports, different volumes, own Redis too. Confirmed isolated — `ptc-milvus`
+shows *only* this project's `markdown_chunks` collection, nothing from any other project.
 
 ### `reranker.py`
 **What it is**: the cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, master prompt
