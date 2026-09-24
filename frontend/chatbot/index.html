@@ -48,6 +48,9 @@
         <span id="context-summary" class="badge context-summary-badge"></span>
         <div class="header-actions">
           <span class="availability"><span></span>Assistant online</span>
+          <button id="theme-toggle" class="theme-toggle" aria-label="Switch between light and dark theme" title="Switch theme">
+            <span aria-hidden="true" id="theme-toggle-icon">🌙</span>
+          </button>
           <button id="context-toggle" class="context-button" aria-label="Toggle simulated SyteLine context" aria-expanded="false" title="Simulated SyteLine context">
             <span aria-hidden="true">⚙️</span>
             <span>Context</span>
@@ -91,15 +94,18 @@
       <main class="chat-card">
         <div id="messages" class="messages"></div>
 
+        <button id="scroll-bottom-button" class="scroll-bottom-button" type="button" aria-label="Scroll to latest message">
+          <span aria-hidden="true">⬇️</span>
+        </button>
+
         <div class="composer">
           <form id="chat-form" class="input-bar">
-            <input
+            <textarea
               id="chat-input"
-              type="text"
+              rows="1"
               placeholder="Ask about orders, credit, shipments, invoices, or payments"
-              autocomplete="off"
               maxlength="1000"
-            />
+            ></textarea>
             <button type="submit" id="send-button" aria-label="Send message">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
                 <path d="M4 12h15M13 6l7 6-7 6" stroke="currentColor" stroke-width="2"
@@ -107,7 +113,7 @@
               </svg>
             </button>
           </form>
-          <p class="composer-note">Answers respect the simulated SyteLine role and context selected above.</p>
+          <p class="composer-note">Answers respect the simulated SyteLine role and context selected above. Enter to send, Shift+Enter for a new line.</p>
         </div>
       </main>
     </div>

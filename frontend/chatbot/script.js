@@ -15,6 +15,9 @@ const ctxGroupEl = document.getElementById("ctx-group");
 const ctxSiteEl = document.getElementById("ctx-site");
 const ctxModuleEl = document.getElementById("ctx-module");
 const ctxFormEl = document.getElementById("ctx-form");
+const themeToggleEl = document.getElementById("theme-toggle");
+const themeToggleIconEl = document.getElementById("theme-toggle-icon");
+const scrollBottomButtonEl = document.getElementById("scroll-bottom-button");
 
 // Relative path on purpose — this page is served by the same FastAPI app
 // it talks to, so it always hits the right host/port with no hardcoding
@@ -60,7 +63,46 @@ const STATUS_STAGE_INTERVAL_MS = 650;
 const STORAGE_SESSIONS_KEY = "ptc_chat_sessions";
 const STORAGE_ACTIVE_KEY = "ptc_active_session_id";
 const STORAGE_CONTEXT_KEY = "ptc_simulated_context";
+const STORAGE_THEME_KEY = "ptc_theme";
 const MAX_SESSIONS = 50;
+const CHAT_INPUT_MAX_HEIGHT = 140;
+
+// ── Theme toggle (manual override on top of the OS light/dark preference) ──
+
+function applyTheme(theme) {
+  if (theme === "light" || theme === "dark") {
+    document.documentElement.setAttribute("data-theme", theme);
+  } else {
+    document.documentElement.removeAttribute("data-theme");
+  }
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const isDark = theme === "dark" || (theme !== "light" && prefersDark);
+  themeToggleIconEl.textContent = isDark ? "☀️" : "🌙";
+}
+
+function loadTheme() {
+  try {
+    return localStorage.getItem(STORAGE_THEME_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function saveTheme(theme) {
+  try {
+    localStorage.setItem(STORAGE_THEME_KEY, theme);
+  } catch {
+    // ignore — theme just won't persist across reloads
+  }
+}
+
+function toggleTheme() {
+  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const current = loadTheme() || (prefersDark ? "dark" : "light");
+  const next = current === "dark" ? "light" : "dark";
+  saveTheme(next);
+  applyTheme(next);
+}
 
 // ── Context Simulator (mock only — stands in for a real SyteLine screen) ──
 
@@ -186,6 +228,7 @@ function renderWelcome() {
     button.innerHTML = `<span aria-hidden="true">${prompt.emoji}</span><span>${prompt.text}</span>`;
     button.addEventListener("click", () => {
       inputEl.value = prompt.text;
+      resizeChatInput();
       inputEl.focus();
     });
     prompts.appendChild(button);
@@ -238,13 +281,48 @@ function buildRatingGroup(sessionIdAtRender, messageId, currentRating) {
   return group;
 }
 
+function buildCopyButton(text) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "copy-button";
+  button.setAttribute("aria-label", "Copy this answer");
+  button.textContent = "📋";
+
+  button.addEventListener("click", async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const helper = document.createElement("textarea");
+        helper.value = text;
+        helper.style.position = "fixed";
+        helper.style.opacity = "0";
+        document.body.appendChild(helper);
+        helper.select();
+        document.execCommand("copy");
+        helper.remove();
+      }
+      button.textContent = "✅";
+      button.classList.add("copied");
+      window.setTimeout(() => {
+        button.textContent = "📋";
+        button.classList.remove("copied");
+      }, 1200);
+    } catch (err) {
+      console.error("Copy failed", err);
+    }
+  });
+
+  return button;
+}
+
 function renderMessage(text, sender, { route, source, sources, score, timestamp, decisionTrace, id, rating, sessionId } = {}) {
   const row = document.createElement("div");
   row.className = `message ${sender}`;
 
   const avatar = document.createElement("div");
   avatar.className = "avatar";
-  avatar.textContent = sender === "user" ? "🧑" : "🤖";
+  avatar.textContent = sender === "user" ? "🧑‍💼" : "🤖";
   avatar.setAttribute("aria-hidden", "true");
 
   const column = document.createElement("div");
@@ -280,6 +358,9 @@ function renderMessage(text, sender, { route, source, sources, score, timestamp,
       decision.className = "decision-note";
       decision.textContent = [decisionTrace.intent, decisionTrace.selected_route].filter(Boolean).join(" → ");
       footer.appendChild(decision);
+    }
+    if (text) {
+      footer.appendChild(buildCopyButton(text));
     }
     if (id) {
       footer.appendChild(buildRatingGroup(sessionId || activeSessionId, id, rating));
@@ -383,7 +464,10 @@ function renderHistoryList(sessions, activeId) {
     deleteBtn.type = "button";
     deleteBtn.className = "history-item-delete";
     deleteBtn.setAttribute("aria-label", "Delete this conversation");
-    deleteBtn.textContent = "🗑️";
+    deleteBtn.innerHTML =
+      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none">' +
+      '<path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2m-9 0 1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" ' +
+      'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     deleteBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       deleteSession(session.id);
@@ -505,11 +589,40 @@ if (window.matchMedia("(max-width: 960px)").matches) {
 
 applyContextToInputs(loadSimulatedContext());
 updateContextSummary();
+applyTheme(loadTheme());
 
 // ── Events ─────────────────────────────────────────────────────────
 
 newChatButtonEl.addEventListener("click", createNewSession);
 clearHistoryButtonEl.addEventListener("click", clearAllHistory);
+
+themeToggleEl.addEventListener("click", toggleTheme);
+
+function resizeChatInput() {
+  inputEl.style.height = "auto";
+  inputEl.style.height = `${Math.min(inputEl.scrollHeight, CHAT_INPUT_MAX_HEIGHT)}px`;
+}
+
+inputEl.addEventListener("input", resizeChatInput);
+
+inputEl.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && !event.shiftKey) {
+    event.preventDefault();
+    formEl.requestSubmit();
+  }
+});
+
+function isScrolledNearBottom() {
+  return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 80;
+}
+
+messagesEl.addEventListener("scroll", () => {
+  scrollBottomButtonEl.classList.toggle("visible", !isScrolledNearBottom());
+});
+
+scrollBottomButtonEl.addEventListener("click", () => {
+  messagesEl.scrollTo({ top: messagesEl.scrollHeight, behavior: "smooth" });
+});
 
 sidebarToggleEl.addEventListener("click", () => {
   sidebarEl.classList.toggle("collapsed");
@@ -555,6 +668,7 @@ formEl.addEventListener("submit", async (event) => {
   renderMessage(query, "user", { timestamp: new Date().toISOString() });
   appendMessageToActiveSession(query, "user");
   inputEl.value = "";
+  resizeChatInput();
   inputEl.disabled = true;
   sendButtonEl.disabled = true;
   showTyping();

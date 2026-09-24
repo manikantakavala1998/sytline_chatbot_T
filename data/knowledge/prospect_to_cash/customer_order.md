@@ -1,69 +1,51 @@
-# Customer Order
+# Customer Order Module
 
-## Overview
+## Purpose and form ownership
 
-A Customer Order is the confirmed request from a Customer to purchase goods or services. It is
-created after a Quotation has been accepted, and it drives everything downstream: pricing and
-credit checks, shipment, invoicing, and payment.
+Customer Orders holds the order header: customer, ship-to, order type and status, dates, terms, shipping and billing defaults, and credit hold information. Customer Order Lines holds the actual items and releases. The standard order-entry path is create header, save it, add lines, check credit and availability, ship, then invoice. A quote may be copied to an order, but a quote is not itself an order. [Infor order entry steps](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html) [Infor Customer Orders](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/forms/cotopics/order_maintenance.htm)
 
-### Keywords
-customer order, sales order, order entry, confirmed order
-
----
-
-## Creating a Customer Order
-
-1. Open the Customer Orders form and select New.
-
-2. Choose the Customer. The system pulls in the customer's default ship-to address, payment
-   terms, and price list automatically.
-
-3. Add one or more Order Lines, specifying the item, quantity, and requested Due Date for each
-   line.
-
-4. Review the calculated pricing on each line — see the Pricing section below for how this is
-   determined.
-
-5. Release the order once all lines are complete and any Credit Hold has been cleared.
-
-**Section Summary:** Creating a Customer Order means selecting a customer, adding order lines,
-confirming pricing, and releasing the order once credit checks pass.
+**Section Summary:** The order header controls the commercial transaction; lines specify demand.
 
 ### Keywords
-create customer order, new order, release order
+customer order, Customer Orders form, order header, sales order, order entry
 
----
+## Create and review an order
 
-## Editing or Cancelling an Order
+1. Search existing orders and customer purchase order references to avoid duplicates.
+2. Create a record on Customer Orders, select customer and ship-to, and fill required header values shown by the site.
+3. Review order type, status, order/requested dates, customer PO, bill-to, ship-to, terms, currency, tax, freight, and salesperson when present.
+4. Save the header, then open Customer Order Lines and add line/releases.
+5. Review unit price, due date, shipping site, available quantity, credit status, and order totals. Use Get ATP/CTP or availability tools if those features are enabled.
+6. Print an Order Verification Report when an acknowledgement is needed; shipment and invoicing are later steps. Customer Orders Quick Entry is an alternate entry path. [Infor order entry steps](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html)
 
-An order can be edited or cancelled only while it is still in an unreleased or unshipped state.
-Once a line has shipped, that line can no longer be edited or cancelled — a return process is
-required instead. Look for the Edit or Cancel option on the same Customer Orders form; if it is
-greyed out, the order has likely already progressed past the point where changes are allowed.
-
-**Section Summary:** Orders can be freely edited or cancelled before shipment; after shipment, use
-the returns process instead.
-
-### Keywords
-edit customer order, cancel order, change order
-
----
-
-## Troubleshooting: Order Won't Release
-
-If a Customer Order will not release, check the following in order:
-
-1. **Credit Hold** — the customer's outstanding balance may exceed their Credit Limit. The order
-   stays on hold until the hold is released by an authorized user.
-2. **Missing required fields** — every order line needs an item, quantity, and price before it can
-   release.
-3. **Site mismatch** — the order's site must match a site the current user has access to.
-
-If none of these resolve it, contact the Accounts Receivable team with the order number and the
-exact error message shown.
-
-**Section Summary:** Most release failures come from a Credit Hold, a missing required field, or a
-site mismatch — check those three before escalating.
+**Section Summary:** Save the header, add lines, then verify commercial, availability, and credit information.
 
 ### Keywords
-order won't release, credit hold, troubleshooting
+create order, new Customer Order, customer PO, ship-to, order verification
+
+## Status, holds, and changes
+
+Order and line statuses are separate. Infor uses Planned and Ordered line states, and a credit check can leave a line Planned or put an order on hold depending on settings. A customer-level hold and order-level hold can both block shipping. Do not tell a user to simply “release the order” as a universal workflow: identify the current status, hold reason, error, line, and local authorization first. For a submitted change, recheck price, dates, tax, allocation, and downstream shipment or invoice history. [Infor order entry steps](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html) [Infor credit hold](https://docs.infor.com/csi/10.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144036235.html)
+
+**Section Summary:** Status and hold are different controls; explain the actual reason before proposing a change.
+
+### Keywords
+order status, Planned, Ordered, credit hold, release order, change order
+
+## Order types and exceptions
+
+Regular and blanket orders differ. Blanket orders use blanket lines and releases with separate ship dates. An order may also have multiple shipping sites, drop-ship lines, EDI origin, letter-of-credit requirements, or shipment approval. These are optional or configuration-dependent paths. Identify the order type and enabled features before giving specific steps. [Infor blanket order lines](https://docs.infor.com/csi/10.x/en-us/csbiolh/customer_svc_user_cl_sl/nol1528915094338.html) [Infor Customer Orders](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/forms/cotopics/order_maintenance.htm)
+
+**Section Summary:** Order type and options determine the relevant line, credit, shipment, and invoice workflow.
+
+### Keywords
+blanket order, order release, EDI order, drop ship, multi-site
+
+## Troubleshoot an order that cannot progress
+
+Check the exact error and order number; current header/line status; customer and order credit hold; missing or invalid customer, ship-to, item, quantity, price, due date, site, tax, or terms; availability and cross-referenced supply; letter-of-credit and shipment approval settings; and whether the line already shipped or invoiced. The Order Entry Exception Report can help identify processing errors. Do not assume a credit hold is the cause merely because an order will not ship. [Infor order entry steps](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html) [Infor shipping customer orders](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144032599.html)
+
+**Section Summary:** Diagnose the exact order and line state before changing it or escalating.
+
+### Keywords
+order won't process, order won't release, order exception, cannot ship

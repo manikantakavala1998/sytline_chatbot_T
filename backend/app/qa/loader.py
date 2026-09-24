@@ -9,6 +9,10 @@ Only rows marked approval_status == "APPROVED" and active == True are kept
 production." Question variations get attached to their parent row so the
 retriever can match against all the different ways someone might ask the
 same thing.
+
+The generated starter workbooks used a placeholder "PTC Training Guide"
+source and incorrectly marked their sample rows APPROVED. Exclude those
+rows until a real source and business approval replace them.
 """
 
 from dataclasses import dataclass, field
@@ -48,6 +52,7 @@ def _load_one_file(path: Path, level: str) -> list[QARecord]:
     qa_df = qa_df[
         (qa_df["approval_status"].astype(str).str.upper() == "APPROVED")
         & (qa_df["active"].astype(bool))
+        & (qa_df["source_reference"].astype(str).str.strip() != "PTC Training Guide")
     ]
 
     variations_by_qa_id: dict[str, list[str]] = {}

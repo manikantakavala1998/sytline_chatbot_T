@@ -14,6 +14,7 @@ venv/
 data/processed/
 *.db
 *.sqlite3
+logs/
 
 # Editors
 .idea/

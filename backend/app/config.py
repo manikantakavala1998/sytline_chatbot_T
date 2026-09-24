@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     primary_llm: str = "gpt-4.1"
     orchestrator_model: str = "gpt-4.1-mini"
+    orchestrator_llm_enabled: bool = True
+    orchestrator_timeout_seconds: float = 12.0
     temperature: float = 0.1
     max_tokens: int = 500
 

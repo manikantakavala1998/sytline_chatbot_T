@@ -69,7 +69,50 @@ falls through to Markdown RAG. This overrides the flowcharts, which show a singl
   before the RAG Service (§72 steps 19–32), exactly as master prompt §9's pipeline
   (normalization → acronym expansion → synonym mapping → context enrichment → exact match →
   BM25 → embedding similarity → hybrid Q&A score → evidence gate) describes. The Help/RAG
-  flowchart module should be read as covering Source B only.
+flowchart module should be read as covering Source B only.
+
+---
+
+## Phase 3 implementation decisions (2026-09-24)
+
+### 5. Trusted boundary vs. LangGraph boundary
+**Decision: session validation, identity/context construction, and base assistant authorization stay
+in ordinary application code before LangGraph; LangGraph starts at the Input Security Gate.**
+
+- The master graph draws Validate Session / Resolve Permissions / Build Context as graph nodes, but
+  its non-negotiable security rules also say actual authorization must never live in prompts.
+- **Consequence**: the API creates one trusted `RequestContext`, checks the user's base access, and
+  then invokes the graph. Q&A and Markdown RAG nodes repeat route-specific permission checks.
+  Models receive no session token and cannot change permission outcomes.
+
+### 6. Phase 4 routes recognized before their connectors exist
+**Decision: classify `LIVE_DATA`, `RAG_IDO`, `NAVIGATION`, and `ACTION` now, but terminate them as
+`CAPABILITY_PENDING` until their authorized Phase 4 connectors exist.**
+
+- Falling back to Q&A/RAG for a live balance or order status could return stale or invented data.
+- Pretending navigation/action succeeded would violate the read-only POC and security architecture.
+- **Consequence**: the user gets an explicit, route-specific explanation; no tool executes and no
+  live ERP value is generated from documents or model memory.
+
+### 7. Security classifier before the trained SLM exists
+**Decision: use layered local detection plus the configured orchestration LLM only for suspicious
+but inconclusive input, with a fail-closed result when semantic classification is unavailable.**
+
+- The target architecture names a security SLM, but that model is produced in Phase 7 and cannot be
+  assumed in Phase 3.
+- Keyword-only blocking is insufficient and creates false positives for legitimate questions such
+  as “How do SyteLine permissions work?”
+- **Consequence**: normalization, bounded decoding, category regexes, and contextual combinations
+  handle clear attacks locally. Only unresolved suspicious text reaches the temporary classifier.
+  Phase 7 can replace that semantic component without changing the gate contract or graph.
+
+### 8. Greeting/chitchat is a deterministic terminal route
+**Decision: greetings and basic conversational messages use `DIRECT_RESPONSE`; they never enter
+Fast Q&A, Markdown RAG, or a paid classifier call.**
+
+- Before Phase 3, `hi` fell through Q&A/RAG and incorrectly returned “No match found.”
+- **Consequence**: greetings, wellbeing/capability questions, thanks, and farewells are fast,
+  reliable, and visible as `GREETING`/`CHITCHAT → DIRECT_RESPONSE` in the decision trace.
 
 ---
 

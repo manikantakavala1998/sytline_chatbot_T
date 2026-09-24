@@ -4,6 +4,7 @@ pymilvus
 milvus-lite
 rank-bm25
 openai
+langgraph
 
 # ── Data processing (Excel + Markdown reading) ──────────────
 pandas
@@ -24,6 +25,7 @@ redis
 
 # ── Utilities ─────────────────────────────────────────────────
 python-dotenv
+pytest
 torch
 transformers
 

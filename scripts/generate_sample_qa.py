@@ -33,7 +33,7 @@ def _row(qa_id, process, module, form, field, intent, sub_intent,
         canonical_question=canonical_question, answer=answer,
         keywords=keywords, synonyms=synonyms, route="FAST_QA",
         source_reference="PTC Training Guide", source_section=source_section,
-        version="1.0", site_scope="", security_scope="ALL", approval_status="APPROVED",
+        version="1.0", site_scope="", security_scope="ALL", approval_status="DRAFT",
         approved_by="", effective_date="2026-01-01", active=True,
         last_reviewed_date="2026-01-01", language="en",
     )

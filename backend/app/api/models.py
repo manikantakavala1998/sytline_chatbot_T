@@ -24,10 +24,13 @@ class ChatRequest(BaseModel):
 
 
 class ChatResponse(BaseModel):
-    route: str  # FAST_QA_RESPONSE | CLARIFY | MARKDOWN_RAG_RESPONSE | NO_ANSWER | BLOCKED
+    # Includes terminal orchestration outcomes (BLOCKED, OUT_OF_SCOPE,
+    # CLARIFY, DIRECT_RESPONSE, CAPABILITY_PENDING) plus Q&A/RAG outcomes.
+    route: str
     answer: str | None
     source: str | None = None  # single source, e.g. a Q&A id
     sources: list[str] | None = None  # multiple sources, e.g. Markdown RAG citations
     score: float
     reason: str | None = None  # why BLOCKED, if it was
     context: dict | None = None  # echoes user/site/module back for transparency
+    decision_trace: dict | None = None  # safe labels only; never raw prompts/answers/tokens

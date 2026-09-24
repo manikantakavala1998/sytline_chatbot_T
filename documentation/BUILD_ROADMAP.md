@@ -15,12 +15,20 @@
 ---
 
 ## Phase 1 — General Foundation (replica-style RAG core, with a mocked permission seam)
+**Status: complete.**
+
 Repo skeleton, config management, FastAPI foundation (§72.1–3) + a proven-pattern RAG engine
 matching `REPLICA_BUILD_PROMPT.md`'s architecture: Excel Q&A schema + Fast Q&A retriever, document
 ingestion + Markdown conversion + chunking, embedding service + Milvus, BM25 + vector + hybrid
 retrieval + RRF + reranker, contextual compression + evidence sufficiency, RAG answer service
 (§72.17–32). A basic `/chat` endpoint wires it together, plus a first-pass neumorphism-styled chat
 UI so there's something to actually look at and test.
+
+**UI refinement (2026-09-24)**: the first-pass page has been upgraded to a responsive,
+indigo/teal neumorphic workspace with a full-height chat area, mobile history drawer, adaptive
+context form, quick-question chips, dark-mode support, and reduced-motion support. The New Chat
+and History area intentionally avoids nested/double background boxes; active history uses a slim
+indicator rather than another rectangular card.
 
 **Not skipped, just mocked**: every call that would eventually need a real permission check
 passes through a stub `PermissionResolver` seam that always returns "allowed" (per master prompt
@@ -34,6 +42,11 @@ SyteLine specifics.
 ---
 
 ## Phase 2 — Real SyteLine Identity, Session & Dynamic Permissions
+**Status: complete at the integration-ready mock milestone.** The runtime interfaces, security
+bootstrap, context flow, dynamic resolver, cache, and allow/deny behavior are working. Replacing
+the mock adapter with live SyteLine calls still depends on the external confirmations below and
+does not require redesigning callers.
+
 SyteLine session integration, security bootstrap, Dynamic Permission Resolver, permission cache,
 Frontend Context Bridge, Context Manager (§72.4–9).
 
@@ -48,6 +61,8 @@ plumbing; the frontend chat panel knows what screen/field/record the user is act
 ---
 
 ## Phase 3 — Security Gate, Classification & Routing
+**Status: complete (2026-09-24).**
+
 Input Security Gate, Scope Classifier, query taxonomy, Ambiguity Resolver, initial LLM-based
 router, LangGraph orchestration (§72.10–15).
 
@@ -58,9 +73,25 @@ though the modules are built in the order listed above.
 **Proves**: malicious, off-topic, and ambiguous requests are caught and handled correctly before
 ever reaching retrieval or generation — the security-first ordering the master prompt insists on.
 
+**Delivered**: layered security detection (including obfuscated attacks), five-label scope with a
+binary gate, the full hierarchical taxonomy, context-first ambiguity resolution, selective query
+transformation, an allowlisted LLM router with deterministic fallback, and a typed LangGraph that
+executes direct responses, Fast Q&A, and Markdown RAG. Live data, navigation, mixed RAG+IDO, and
+actions are recognized but terminate as `CAPABILITY_PENDING` until their authorized Phase 4
+connectors exist. See `PHASE_3_ORCHESTRATION.md` for the node-by-node contract, route table,
+logging events, and acceptance evidence.
+
 ---
 
 ## Phase 4 — Prospect-to-Cash Domain Data & Live ERP Integration
+**Status: next.**
+
+**Pre-Phase-4 knowledge expansion (2026-09-24):** 18 module-wise Markdown articles now cover the
+general Infor CRM-to-cash lifecycle, form/field orientation, workflows, exceptions, and
+cross-process tracing. The original five starter articles were corrected. This is RAG content,
+not model fine-tuning or live ERP integration; deployment-specific procedures and IDO/API mappings
+still need confirmation. See `PROSPECT_TO_CASH_KNOWLEDGE_BASE.md`.
+
 Prospect-to-Cash metadata catalogue, SyteLine connector, IDO Security Gateway, Tool Registry,
 live-data service, navigation (§72.16, §72.33–37).
 
@@ -82,6 +113,13 @@ appropriately by role and frustration level, and both escalation paths (support 
 
 ## Phase 6 — Audit & Monitoring
 Audit trail, application/AI/SyteLine monitoring (§72.43–44).
+
+**Foundation already added (2026-09-24; Phase 6 is not thereby complete)**: structured
+request-ID-correlated application events now cover HTTP entry/exit, security bootstrap, context,
+permissions, Q&A/RAG retrieval, answer generation, and failures. The same safe metadata is shown
+in the terminal and written to the rotating `logs/chatbot.log`; raw prompts, answers, retrieved
+text, tokens, and credentials are excluded. Phase 6 still owns the durable audit model,
+dashboards, alerting, retention policy, and broader AI/SyteLine monitoring.
 
 **Proves**: every request is traceable end to end (who asked, what was retrieved, what was
 allowed, what was answered) and operational health is visible.
@@ -110,6 +148,6 @@ CREATE/UPDATE/RELEASE/APPROVE actions) get considered.
 ---
 
 ## Cross-cutting, not a numbered phase
-CI/CD, environments (DEV/TEST/UAT/PROD), backup/DR, and the test suite (§65–68) are not a single
-phase at the end — each gets whatever slice it needs added incrementally alongside the phase that
-introduces the thing it's testing/deploying/backing up.
+CI/CD, environments (DEV/TEST/UAT/PROD), backup/DR, logging, and the test suite (§65–68) are not a
+single phase at the end — each gets whatever slice it needs added incrementally alongside the
+phase that introduces the thing it's testing/deploying/backing up.
