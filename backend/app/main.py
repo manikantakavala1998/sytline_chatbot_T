@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.api.routes import router
 from backend.app.config import BASE_DIR
+from backend.app.history.store import close_history_store, init_history_store
 from backend.app.orchestration.graph import get_chat_orchestrator
 from backend.app.qa.retriever import get_qa_index
 from backend.app.rag.retriever import get_rag_index
@@ -33,12 +34,14 @@ async def lifespan(app: FastAPI):
         get_rag_index()
         get_chat_orchestrator()
         log_event(logger, "startup_orchestration_ready", engine="langgraph")
+        init_history_store()  # fail-soft: chat still works without Postgres, just without memory
         log_event(logger, "startup_ready", status="accepting_requests")
         yield
     except Exception:
         logger.exception("event=startup_failed")
         raise
     finally:
+        close_history_store()
         log_event(logger, "shutdown_complete")
 
 

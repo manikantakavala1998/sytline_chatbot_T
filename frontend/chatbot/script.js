@@ -18,11 +18,14 @@ const ctxFormEl = document.getElementById("ctx-form");
 const themeToggleEl = document.getElementById("theme-toggle");
 const themeToggleIconEl = document.getElementById("theme-toggle-icon");
 const scrollBottomButtonEl = document.getElementById("scroll-bottom-button");
+const historySearchEl = document.getElementById("history-search");
+const charCounterEl = document.getElementById("char-counter");
 
 // Relative path on purpose — this page is served by the same FastAPI app
 // it talks to, so it always hits the right host/port with no hardcoding
 // (the replica project's bug this project is explicitly avoiding).
 const CHAT_ENDPOINT = "/chat";
+const HISTORY_ENDPOINT = "/api/history";
 
 // route -> { cls: which color the badge/left-border uses, label: shown text }
 const ROUTE_STYLES = {
@@ -34,6 +37,7 @@ const ROUTE_STYLES = {
   OUT_OF_SCOPE: { cls: "route-neutral", label: "Out of scope" },
   DIRECT_RESPONSE: { cls: "route-success", label: "Direct response" },
   CAPABILITY_PENDING: { cls: "route-warning", label: "Planned route" },
+  ERROR: { cls: "route-danger", label: "Connection error" },
 };
 
 const WELCOME_MESSAGE =
@@ -151,7 +155,9 @@ function onContextChange() {
   updateContextSummary();
 }
 
-// ── Session storage (client-side only — no backend history yet) ──────
+// ── Session storage ──────────────────────────────────────────────────
+// PostgreSQL (via /api/history) is the source of truth; localStorage is only
+// a fast cache and the fallback when the history service is unreachable.
 
 function loadSessions() {
   try {
@@ -197,6 +203,84 @@ function newMessageId() {
 
 function findSession(sessions, id) {
   return sessions.find((s) => s.id === id) || null;
+}
+
+// ── Server history (PostgreSQL) ───────────────────────────────────────
+
+function historyUrl(path) {
+  const group = readContextFromInputs().simulated_group;
+  return `${HISTORY_ENDPOINT}${path}${path.includes("?") ? "&" : "?"}simulated_group=${encodeURIComponent(group)}`;
+}
+
+function fromServerMessage(message) {
+  if (message.role === "user") {
+    return { id: `db_${message.message_id}`, sender: "user", text: message.content, timestamp: message.created_at };
+  }
+  return {
+    id: `db_${message.message_id}`,
+    dbId: message.message_id,
+    sender: "bot",
+    text: message.content,
+    route: message.route,
+    source: message.source,
+    sources: message.sources,
+    score: message.score,
+    decisionTrace: message.decision_trace,
+    rating: message.rating === 1 ? "up" : message.rating === -1 ? "down" : null,
+    timestamp: message.created_at,
+  };
+}
+
+async function loadSessionsFromServer() {
+  try {
+    const response = await fetch(historyUrl("/sessions?include_messages=true"));
+    if (!response.ok) return null;
+    const data = await response.json();
+    return data.sessions.map((s) => ({
+      id: s.session_id,
+      title: s.title,
+      createdAt: s.created_at,
+      messages: s.messages.map((message, i) => {
+        const mapped = fromServerMessage(message);
+        // The follow-up rewrite is stored on the question; show it under its answer.
+        const question = s.messages[i - 1];
+        if (mapped.sender === "bot" && question?.role === "user" && question.resolved_query) {
+          mapped.resolvedQuery = question.resolved_query;
+        }
+        return mapped;
+      }),
+    }));
+  } catch {
+    return null; // history service down — keep the local cache
+  }
+}
+
+function sendHistoryRequest(method, path, body) {
+  fetch(historyUrl(path), {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  }).catch((err) => console.warn("History update failed", err));
+}
+
+async function syncSessionsFromServer() {
+  const serverSessions = await loadSessionsFromServer();
+  if (!serverSessions) return;
+  // Keep a brand-new, still-empty chat the user just opened (it isn't on the server yet).
+  const draft = findSession(sessions, activeSessionId);
+  sessions = serverSessions;
+  if (draft && draft.messages.length === 0 && !findSession(sessions, draft.id)) {
+    sessions.unshift(draft);
+  }
+  if (!findSession(sessions, activeSessionId)) {
+    activeSessionId = sessions.length > 0 ? sessions[0].id : null;
+  }
+  if (!activeSessionId) {
+    createNewSession();
+    return;
+  }
+  persistAndRender();
+  renderMessages(findSession(sessions, activeSessionId));
 }
 
 function formatTime(iso) {
@@ -316,7 +400,11 @@ function buildCopyButton(text) {
   return button;
 }
 
-function renderMessage(text, sender, { route, source, sources, score, timestamp, decisionTrace, id, rating, sessionId } = {}) {
+function renderMessage(
+  text,
+  sender,
+  { route, source, sources, score, timestamp, decisionTrace, id, rating, sessionId, onRetry, resolvedQuery } = {}
+) {
   const row = document.createElement("div");
   row.className = `message ${sender}`;
 
@@ -334,6 +422,15 @@ function renderMessage(text, sender, { route, source, sources, score, timestamp,
   bubble.className = "bubble" + (style ? ` ${style.cls}` : "");
   bubble.textContent = text;
   column.appendChild(bubble);
+
+  if (onRetry) {
+    const retryBtn = document.createElement("button");
+    retryBtn.type = "button";
+    retryBtn.className = "retry-button";
+    retryBtn.innerHTML = '<span aria-hidden="true">↻</span><span>Retry</span>';
+    retryBtn.addEventListener("click", onRetry);
+    column.appendChild(retryBtn);
+  }
 
   const citation = source || (sources && sources.length ? sources.join("; ") : null);
   const hasFooter = sender === "bot" && (style || citation || timestamp || decisionTrace || id);
@@ -359,7 +456,7 @@ function renderMessage(text, sender, { route, source, sources, score, timestamp,
       decision.textContent = [decisionTrace.intent, decisionTrace.selected_route].filter(Boolean).join(" → ");
       footer.appendChild(decision);
     }
-    if (text) {
+    if (text && !onRetry) {
       footer.appendChild(buildCopyButton(text));
     }
     if (id) {
@@ -367,6 +464,12 @@ function renderMessage(text, sender, { route, source, sources, score, timestamp,
     }
     column.appendChild(footer);
 
+    if (resolvedQuery) {
+      const understood = document.createElement("div");
+      understood.className = "resolved-note";
+      understood.textContent = `🔗 Understood as: “${resolvedQuery}”`;
+      column.appendChild(understood);
+    }
     if (citation) {
       const src = document.createElement("div");
       src.className = "source-note";
@@ -439,43 +542,91 @@ function hideTyping() {
   }
 }
 
-function renderHistoryList(sessions, activeId) {
+// ── History grouping (Today / Yesterday / Previous 7 Days / Older) ────
+
+const HISTORY_BUCKET_ORDER = ["Today", "Yesterday", "Previous 7 days", "Older"];
+
+function getSessionActivityDate(session) {
+  const last = session.messages[session.messages.length - 1];
+  return new Date((last && last.timestamp) || session.createdAt);
+}
+
+function getDateBucket(date) {
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfYesterday = new Date(startOfToday);
+  startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+  const startOfWeek = new Date(startOfToday);
+  startOfWeek.setDate(startOfWeek.getDate() - 7);
+  if (date >= startOfToday) return "Today";
+  if (date >= startOfYesterday) return "Yesterday";
+  if (date >= startOfWeek) return "Previous 7 days";
+  return "Older";
+}
+
+function buildHistoryItem(session, activeId) {
+  const item = document.createElement("div");
+  item.className = "history-item" + (session.id === activeId ? " active" : "");
+
+  const title = document.createElement("button");
+  title.type = "button";
+  title.className = "history-item-title";
+  title.textContent = session.title || "New chat";
+  title.addEventListener("click", () => switchSession(session.id));
+
+  const deleteBtn = document.createElement("button");
+  deleteBtn.type = "button";
+  deleteBtn.className = "history-item-delete";
+  deleteBtn.setAttribute("aria-label", "Delete this conversation");
+  deleteBtn.innerHTML =
+    '<svg viewBox="0 0 24 24" width="15" height="15" fill="none">' +
+    '<path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2m-9 0 1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  deleteBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    deleteSession(session.id);
+  });
+
+  item.appendChild(title);
+  item.appendChild(deleteBtn);
+  return item;
+}
+
+function renderHistoryList(sessions, activeId, query = "") {
   historyListEl.innerHTML = "";
 
-  if (sessions.length === 0) {
+  const normalizedQuery = query.trim().toLowerCase();
+  const filtered = normalizedQuery
+    ? sessions.filter((s) => (s.title || "New chat").toLowerCase().includes(normalizedQuery))
+    : sessions;
+
+  if (filtered.length === 0) {
     const empty = document.createElement("div");
     empty.className = "history-empty";
-    empty.textContent = "No conversations yet.";
+    empty.textContent = normalizedQuery ? "No conversations match your search." : "No conversations yet.";
     historyListEl.appendChild(empty);
     return;
   }
 
-  for (const session of sessions) {
-    const item = document.createElement("div");
-    item.className = "history-item" + (session.id === activeId ? " active" : "");
+  const buckets = new Map();
+  for (const session of filtered) {
+    const bucket = getDateBucket(getSessionActivityDate(session));
+    if (!buckets.has(bucket)) buckets.set(bucket, []);
+    buckets.get(bucket).push(session);
+  }
 
-    const title = document.createElement("button");
-    title.type = "button";
-    title.className = "history-item-title";
-    title.textContent = session.title || "New chat";
-    title.addEventListener("click", () => switchSession(session.id));
+  for (const bucketName of HISTORY_BUCKET_ORDER) {
+    const bucketSessions = buckets.get(bucketName);
+    if (!bucketSessions || bucketSessions.length === 0) continue;
 
-    const deleteBtn = document.createElement("button");
-    deleteBtn.type = "button";
-    deleteBtn.className = "history-item-delete";
-    deleteBtn.setAttribute("aria-label", "Delete this conversation");
-    deleteBtn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="15" height="15" fill="none">' +
-      '<path d="M4 7h16M9 7V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2m-9 0 1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13" ' +
-      'stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-    deleteBtn.addEventListener("click", (event) => {
-      event.stopPropagation();
-      deleteSession(session.id);
-    });
+    const label = document.createElement("div");
+    label.className = "history-group-label";
+    label.textContent = bucketName;
+    historyListEl.appendChild(label);
 
-    item.appendChild(title);
-    item.appendChild(deleteBtn);
-    historyListEl.appendChild(item);
+    for (const session of bucketSessions) {
+      historyListEl.appendChild(buildHistoryItem(session, activeId));
+    }
   }
 }
 
@@ -487,7 +638,7 @@ let activeSessionId = getActiveSessionId();
 function persistAndRender() {
   saveSessions(sessions);
   setActiveSessionId(activeSessionId);
-  renderHistoryList(sessions, activeSessionId);
+  renderHistoryList(sessions, activeSessionId, historySearchEl.value);
 }
 
 function createNewSession() {
@@ -513,6 +664,7 @@ function deleteSession(id) {
   if (!window.confirm(`Delete ${label}? This can't be undone.`)) return;
 
   sessions = sessions.filter((s) => s.id !== id);
+  sendHistoryRequest("DELETE", `/sessions/${encodeURIComponent(id)}`);
 
   if (activeSessionId === id) {
     if (sessions.length > 0) {
@@ -535,6 +687,7 @@ function clearAllHistory() {
   if (!window.confirm("Delete all conversations? This can't be undone.")) return;
   sessions = [];
   activeSessionId = null;
+  sendHistoryRequest("DELETE", "/sessions");
   persistAndRender();
   createNewSession();
 }
@@ -546,6 +699,9 @@ function setMessageRating(sessionId, messageId, value) {
   if (!message) return null;
   message.rating = message.rating === value ? null : value; // click the active one again to unset
   saveSessions(sessions);
+  if (message.dbId) {
+    sendHistoryRequest("PUT", `/messages/${message.dbId}/rating`, { rating: message.rating });
+  }
   return message.rating;
 }
 
@@ -590,6 +746,7 @@ if (window.matchMedia("(max-width: 960px)").matches) {
 applyContextToInputs(loadSimulatedContext());
 updateContextSummary();
 applyTheme(loadTheme());
+syncSessionsFromServer();
 
 // ── Events ─────────────────────────────────────────────────────────
 
@@ -598,18 +755,50 @@ clearHistoryButtonEl.addEventListener("click", clearAllHistory);
 
 themeToggleEl.addEventListener("click", toggleTheme);
 
+const CHAT_INPUT_MAX_LENGTH = 1000;
+const CHAT_INPUT_WARN_LENGTH = 900;
+
 function resizeChatInput() {
   inputEl.style.height = "auto";
   inputEl.style.height = `${Math.min(inputEl.scrollHeight, CHAT_INPUT_MAX_HEIGHT)}px`;
 }
 
-inputEl.addEventListener("input", resizeChatInput);
+function updateCharCounter() {
+  const length = inputEl.value.length;
+  charCounterEl.textContent = `${length} / ${CHAT_INPUT_MAX_LENGTH}`;
+  charCounterEl.classList.toggle("char-counter-warn", length >= CHAT_INPUT_WARN_LENGTH);
+}
+
+function onComposerInput() {
+  resizeChatInput();
+  updateCharCounter();
+}
+
+inputEl.addEventListener("input", onComposerInput);
+updateCharCounter();
 
 inputEl.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     formEl.requestSubmit();
   }
+});
+
+// Esc closes whichever overlay/panel is open — the context simulator, or
+// the sidebar drawer on mobile.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!contextPanelEl.classList.contains("collapsed")) {
+    contextPanelEl.classList.add("collapsed");
+    contextToggleEl.setAttribute("aria-expanded", "false");
+  }
+  if (window.matchMedia("(max-width: 960px)").matches && !sidebarEl.classList.contains("collapsed")) {
+    sidebarEl.classList.add("collapsed");
+  }
+});
+
+historySearchEl.addEventListener("input", () => {
+  renderHistoryList(sessions, activeSessionId, historySearchEl.value);
 });
 
 function isScrolledNearBottom() {
@@ -641,6 +830,8 @@ for (const el of [ctxGroupEl, ctxSiteEl, ctxModuleEl, ctxFormEl]) {
   el.addEventListener("change", onContextChange);
   el.addEventListener("input", onContextChange);
 }
+// Each simulated group is a different user, and history belongs to the user.
+ctxGroupEl.addEventListener("change", syncSessionsFromServer);
 
 async function sendQuery(query) {
   const context = readContextFromInputs();
@@ -649,6 +840,7 @@ async function sendQuery(query) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       query,
+      session_id: activeSessionId,
       simulated_group: context.simulated_group,
       context: { site: context.site, module: context.module, form: context.form },
     }),
@@ -660,15 +852,7 @@ async function sendQuery(query) {
   return response.json();
 }
 
-formEl.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  const query = inputEl.value.trim();
-  if (!query) return;
-
-  renderMessage(query, "user", { timestamp: new Date().toISOString() });
-  appendMessageToActiveSession(query, "user");
-  inputEl.value = "";
-  resizeChatInput();
+async function requestAnswerFor(query) {
   inputEl.disabled = true;
   sendButtonEl.disabled = true;
   showTyping();
@@ -677,6 +861,8 @@ formEl.addEventListener("submit", async (event) => {
     const result = await sendQuery(query);
     const meta = {
       id: newMessageId(),
+      dbId: result.message_id,
+      resolvedQuery: result.resolved_query,
       sessionId: activeSessionId,
       route: result.route,
       source: result.source,
@@ -696,12 +882,25 @@ formEl.addEventListener("submit", async (event) => {
   } catch (err) {
     console.error("Chat request failed", err);
     hideTyping();
-    const errorText = "Sorry, something went wrong reaching the server. Please try again.";
-    renderMessage(errorText, "bot");
-    appendMessageToActiveSession(errorText, "bot");
+    const errorText = "Sorry, something went wrong reaching the server. Please check your connection and try again.";
+    renderMessage(errorText, "bot", { route: "ERROR", onRetry: () => requestAnswerFor(query) });
+    appendMessageToActiveSession(errorText, "bot", { route: "ERROR" });
   } finally {
     inputEl.disabled = false;
     sendButtonEl.disabled = false;
     inputEl.focus();
   }
+}
+
+formEl.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const query = inputEl.value.trim();
+  if (!query) return;
+
+  renderMessage(query, "user", { timestamp: new Date().toISOString() });
+  appendMessageToActiveSession(query, "user");
+  inputEl.value = "";
+  onComposerInput();
+
+  requestAnswerFor(query);
 });

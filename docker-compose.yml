@@ -86,7 +86,27 @@ services:
       - ptc_redis_data:/data
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 
+  # Conversation history (sessions + messages). The app creates its own tables
+  # on startup — see backend/app/history/store.py.
+  postgres:
+    container_name: ptc-postgres
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-ptc_chat}
+      POSTGRES_USER: ${POSTGRES_USER:-ptc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ptc_local_dev}
+    ports:
+      - "5433:5432"  # our app connects here (POSTGRES_PORT); 5433 avoids a local Postgres on 5432
+    volumes:
+      - ptc_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
 volumes:
+  ptc_postgres_data:
   ptc_etcd_data:
   ptc_minio_data:
   ptc_milvus_data:

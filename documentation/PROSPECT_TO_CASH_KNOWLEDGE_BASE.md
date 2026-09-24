@@ -29,14 +29,14 @@ The content is **general Infor CSI/SyteLine guidance**, based on public Infor he
 | Cross-process FAQ | `faq.md` | End-to-end trace, question-to-data mapping |
 | Form/field guide | `form_field_catalog.md` | Owning forms, displayed field meaning, relationships |
 
-Every module is stored directly under `data/knowledge/prospect_to_cash/` because `process_all_markdown()` currently reads only `*.md` in that folder. Each section uses headings, a concise Section Summary, and Keywords for the existing chunker. The frontend's source citation points to source filename and heading path.
+Every module is stored directly under `data/knowledge/prospect_to_cash/` because `process_all_markdown()` currently reads only `*.md` in that folder. Each section uses headings, a concise Section Summary, and Keywords for the existing chunker. The files contain the explanations, fields, steps, and decision checks as plain text with no external links. The frontend's source citation points to the local source filename and heading path.
 
 ## Source policy
 
 - The Markdown paraphrases [Infor CRM overview](https://docs.infor.com/csi/10.x/en-us/csbiolh/sales_crm_user_cl_sl/mergedprojects/sl_custvend/other/overview/crm_overview.html), [recommended CRM setup](https://docs.infor.com/csi/2026.x/en-us/csbiolh/sales_crm_user_cl_sl/lsm1454144069328.html), and [CRM scenarios](https://docs.infor.com/csi/2026.x/en-us/csbiolh/sales_crm_user_cl_sl/lsm1454144070576.html) for front-office flow.
 - It uses [customer creation](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/creating_a_customer.html), [order entry](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html), [credit hold](https://docs.infor.com/csi/10.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144036235.html), [shipping](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144032599.html), and [order invoicing](https://docs.infor.com/csi/10.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144031725.html) for fulfillment.
 - It uses [A/R steps](https://docs.infor.com/csi/10.x/en-us/csbiolh/financials_user_cl_sl/lsm1454143881752.html), [quick payment application](https://docs.infor.com/csi/latest/en-us/csbiolh/financials_user_cl_sl/lsm1454143884482.html), and [A/R aging](https://docs.infor.com/csi/latest/en-us/csbiolh/financials_user_cl_sl/lsm1454143885762.html) for cash collection.
-- Module sections link directly to their supporting Infor help. Version families are mixed because an exact deployment version was not supplied; release-specific differences must be checked before operational use.
+- Source references remain in this non-ingested documentation file for audit. No source URL is included in a vectorized knowledge article. Version families are mixed because an exact deployment version was not supplied; release-specific differences must be checked before operational use.
 
 ## Corrections to the starter knowledge
 
@@ -56,8 +56,8 @@ The exact form identifiers, IDO collections, properties, methods, role permissio
 
 ## Verification for this content change
 
-1. Confirm every expected Markdown file exists and links use reachable Infor pages.
-2. Run `process_all_markdown()` and confirm each file yields nonempty chunks with unique IDs.
-3. Restart the app to rebuild BM25/vector indexes and check `startup_ingestion_begin` and RAG index logs in `logs/chatbot.log`.
-4. Query representative definitions and process questions for each module; inspect source filename/path and ensure no sample Q&A answer overrides a corrected article.
-5. Validate the actual deployment version and local procedures with a SyteLine consultant before marking any area approved for production.
+1. Confirm every expected Markdown file exists, has substantive text, and contains no external URLs or Markdown links.
+2. Re-run `process_all_markdown()` after this content expansion; the earlier 96-chunk result predates the added field and decision sections.
+3. Rebuild the running RAG index after the Markdown edits and verify the new vector count and `startup_ready` in `logs/chatbot.log`.
+4. Live `/chat` queries returned `MARKDOWN_RAG_RESPONSE` from the new prospect, credit, invoice, and payment articles. The invoice answer now names the To Be Invoiced Report and Order Invoicing/Credit Memo instead of claiming shipment automatically creates an invoice. A customer-balance request without an identifier returned `CLARIFY`.
+5. The focused and existing automated suite passed: 39 tests. Validate the actual deployment version and local procedures with a SyteLine consultant before marking any area approved for production.

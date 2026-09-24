@@ -67,6 +67,11 @@ project name is `ptc-chatbot`. Start with `docker compose up -d`, browse vectors
 explicitly asked for full separation, so this dedicated stack replaced that the same day
 (2026-09-24). `backend/app/config.py`'s `milvus_uri`/`redis_port` defaults point here.
 
+**Added 2026-09-24 — `postgres` (`ptc-postgres`, `postgres:16-alpine`, host port `5433`)**: stores
+conversation history (see `history/store.py`). Port 5433 (not 5432) so it never collides with a
+Postgres already installed on the machine; data lives in the `ptc_postgres_data` volume. DB name,
+user and password come from the `POSTGRES_*` variables (local-dev defaults if unset).
+
 ---
 
 ## `backend/app/` (Phase 1 — foundation)
@@ -85,7 +90,11 @@ startup so routing errors fail during startup rather than during the first user 
 ### `api/routes.py`
 **What it is**: `/health`, `/api/info`, and the working `/chat` orchestration route. A chat turn
 flows through the trusted Phase 2 session/context/base-permission boundary and then invokes the
-Phase 3 LangGraph. The graph owns security, scope, ambiguity, transformation, classification,
+Phase 3 LangGraph. (2026-09-24: `/chat` also loads the conversation's recent turns from Postgres
+before the graph and saves the question + answer after it, returning `message_id` and
+`resolved_query`; new `/api/history/sessions[/{id}]` GET/DELETE and
+`/api/history/messages/{id}/rating` PUT endpoints, all scoped to the trusted user.)
+The graph owns security, scope, ambiguity, transformation, classification,
 route selection, Fast Q&A, and Markdown RAG execution. Each important transition is logged as a
 named event tied to the request ID, without writing the raw question or answer into logs.
 
@@ -111,7 +120,8 @@ order") to get confused with each other.
 ### `qa/loader.py`
 **What it is**: reads every `data/qa/prospect_to_cash/<level>.xlsx` file (one per Prospect-to-Cash
 stage) and keeps only rows marked `APPROVED` + `active`, per the master prompt's rule that only
-approved/active records may be used in production.
+approved/active records may be used in production. It additionally excludes the known placeholder
+`PTC Training Guide` sample source until those rows are replaced with real, reviewed content.
 
 ### `qa/glossary.py`
 **What it is**: reads `data/metadata/business_glossary.csv` and uses it to recognize when a user's
@@ -124,7 +134,7 @@ step from the master prompt's Fast Q&A pipeline (§9).
 normalize → glossary expansion → exact match → BM25 (keyword) → embedding similarity → combined
 hybrid score → a quality gate that decides between a confident answer (`FAST_QA_RESPONSE`), asking
 the user to clarify between close candidates (`CLARIFY`), or handing off to document search
-(`MARKDOWN_RAG`, not built yet). The score thresholds are starter values, explicitly not tuned —
+(`MARKDOWN_RAG`). The score thresholds are starter values, explicitly not tuned —
 the master prompt insists these come from real evaluation later, not a guess.
 
 ### `api/models.py`
@@ -172,15 +182,29 @@ DRAFT. Review and replace them with real sourced Q&A before enabling Fast Q&A co
 ### `scripts/generate_sample_qa.py`
 **What it is**: the generator that writes the files above. Re-run it any time to regenerate all
 14 files from the `LEVELS` dict inside it (it overwrites them). Add more dummy/starter rows here,
-or edit the `.xlsx` files directly once real content replaces the placeholders.
+or edit the `.xlsx` files directly once real content replaces the placeholders. Generated starter
+rows now carry DRAFT approval status. **Superseded (2026-09-24)** by `build_qa_from_knowledge.py`
+below; kept only because that script reuses its column definitions.
+
+### `scripts/build_qa_from_knowledge.py`
+**What it is**: builds the Fast Q&A Excel files *from the Markdown knowledge base*, one
+`<md stem>.xlsx` per article, so Excel and Markdown can never contradict each other (the old
+hand-typed starter rows did). For each section the LLM drafts up to 2 Q&A pairs plus 3 question
+variations using only that section's text; a deterministic grounding gate drops any answer whose
+content words aren't in the section (first run: 132 kept, 21 dropped). Rows use `KB-xxxx` ids
+(distinct from the retired `QA-xxxx` placeholders), `source_reference` = the `.md` file and
+`source_section` = the heading path. Marked APPROVED so they load, but `approved_by` says
+"AUTO-DERIVED … pending SME review" — a business owner should review them before production.
+Run with `python -m scripts.build_qa_from_knowledge` after editing the Markdown (it overwrites all
+Excel files).
 
 ### `data/knowledge/prospect_to_cash/*.md`
 **What it is**: 18 retrieval-ready, module-wise Markdown articles covering CRM setup; prospect,
 lead, opportunity, estimate, quotation, customer, order header/line, pricing, credit, shipment,
 invoice, payment, follow-up, returns, form/field guidance, and cross-process tracing. The five
 original starter articles were corrected and expanded; the others were added before Phase 4.
-Every article uses heading hierarchy, `### Keywords`, and `**Section Summary:**` with links to
-supporting Infor help. See `PROSPECT_TO_CASH_KNOWLEDGE_BASE.md` for inventory, source policy,
+Every article uses heading hierarchy, `### Keywords`, and `**Section Summary:**` with complete
+plain-text guidance and no external links. See `PROSPECT_TO_CASH_KNOWLEDGE_BASE.md` for inventory, source policy,
 known limits, and verification. These are general vendor-guidance drafts, not approved site
 procedures or model fine-tuning data. The index loads Markdown once at app startup, so restart or
 reindex after edits. Technical IDO/API mappings remain `[NEEDS SYTELINE CONFIRMATION]`.
@@ -217,7 +241,15 @@ reusing an already-running Milvus from a different, older project (`PycharmProje
 but the user explicitly asked for full separation, so that was replaced the same day with this
 project's own dedicated `docker-compose.yml` (see below): different container names (`ptc-*`
 prefix), different host ports, different volumes, own Redis too. Confirmed isolated — `ptc-milvus`
-shows *only* this project's `markdown_chunks` collection, nothing from any other project.
+shows *only* this project's collection, nothing from any other project.
+
+**2026-09-24 — one collection for both sources.** The collection is now `ptc_knowledge` (the old
+`markdown_chunks` is dropped on startup) and holds Markdown chunks *and* Excel Q&A rows, told apart
+by `source_type`. Every field is declared in the schema (`source_type`, `chunk_id`, `source_file`,
+`level`, `full_context_path`, `qa_id`, `question`, `text`, …) instead of hidden dynamic fields, so
+Attu (http://localhost:3001) shows real columns; inserts are flushed, so the row count is right
+(previously Attu showed 0 rows and only `id`/`vector`). `search()` takes an optional
+`source_type` filter.
 
 ### `reranker.py`
 **What it is**: the cross-encoder reranker (`cross-encoder/ms-marco-MiniLM-L-6-v2`, master prompt
@@ -231,11 +263,14 @@ gate (starter threshold, tested against this project's own dummy data — not a 
 number), and simple contextual compression (caps total context by character budget, keeps only
 chunks that clear the relevance bar rather than blindly keeping the top 5 regardless of score).
 
-**Known limitation (found while testing, not fixed yet on purpose)**: some troubleshooting-style
-questions ("why won't my order release") still get intercepted by Fast Q&A with a related-but-not-
-quite-right answer (e.g. the "what is a Customer Order" definition), because Phase 1 has no intent
-classifier yet to tell "define X" apart from "how do I fix X." That's Phase 3's job (Scope/Intent
-Classification, per `BUILD_ROADMAP.md`) — expected at this stage, not a bug to chase down now.
+**2026-09-24 — unified Excel + Markdown retrieval (replica pattern).** Each search now takes the
+top 10 Excel candidates and top 10 Markdown candidates (each via Milvus vector search filtered by
+`source_type` + BM25 + RRF), reranks all 20 with the one cross-encoder so the scores are directly
+comparable, and applies the replica's guaranteed-include rescue (a vector match ≥ 0.80 is never
+dropped). Results carry each item's source and the best score per source. Excel rows are
+represented as chunks whose text includes their question variations, so the reranker recognises
+paraphrases. How the orchestrator uses this to pick verbatim Excel vs a generated answer is in
+`ARCHITECTURE_DECISIONS.md` decision #9.
 
 ### `answer_service.py`
 **What it is**: calls the primary LLM to generate a grounded, cited answer from the retrieved
@@ -321,11 +356,21 @@ clarification when required context, detail, or version is missing or actions co
 expansion, entity/identifier extraction, and explicit multi-part decomposition. Records exactly
 which transformations ran instead of applying every NLP technique to every query.
 
+Retrieval-quality fixes (measured with reranker scores): a leading greeting ("good morning, how
+do I …") is removed before classification and search and kept as `leading_greeting` so the reply
+can greet back — it had dropped relevance from 2.9 to -1.0. The *search text only* (not the
+question the answer model sees) also drops polite openers ("Can you…", "Could you please tell
+me…") and rewrites "lifecycle"/"journey" to "process", the word the knowledge base actually uses.
+Each decomposed sub-question gets its own search string in `expanded_subqueries`.
+
 ### `classification/router.py`
 **What it is**: the initial structured LLM classifier and three-source route selector. The model
 can return only declared taxonomy values and allowlisted tool candidates; Python enforces the final
 intent-to-route policy and supplies a deterministic fallback. Greetings/chitchat bypass the model
-and retrieval entirely.
+and retrieval entirely. The greeting pattern also accepts a short trailing pleasantry ("good
+morning, how are you", "hi team") and records which greeting was used as `sub_intent`
+(`good_morning`, `good_afternoon`, `good_evening`, `hi`, …) so `graph.py` can answer "Good morning!"
+back instead of one generic reply for every greeting.
 
 ### `orchestration/state.py`
 **What it is**: typed `ChatWorkflowState` and `WorkflowResult` contracts. State carries the trusted
@@ -336,6 +381,43 @@ context plus each level's result; the final API-safe decision trace contains lab
 → classification → route selection, then terminate or run direct response/Fast Q&A/Markdown RAG.
 Phase-4-or-later routes return `CAPABILITY_PENDING` instead of inventing ERP data or performing an
 unavailable navigation/action.
+
+Follow-up questions (added 2026-09-24): a `followup_resolution` node runs right after the security
+gate and before scope. With earlier turns from Postgres it rewrites "how do I convert it?" into
+"How do I convert a quotation?" (`classification/followup.py`), so scope/ambiguity/RAG all see a
+standalone question. `run()` takes the `history` list; the decision trace reports
+`history_turns_used` and `followup_resolved`.
+
+Multi-question messages: the RAG node searches every sub-question separately
+(`_search_each_question`) and interleaves the top chunks round-robin under a 9,000-character
+budget, so "What is a quotation and how is an invoice created?" retrieves both quotation.md and
+invoice.md instead of only the dominant topic. `_normalize_chitchat_sub_intent` maps the LLM
+classifier's free-form chitchat labels (e.g. `CHECK_WELLBEING`) onto the canned replies.
+
+### `classification/followup.py` (added 2026-09-24)
+**What it is**: turns a follow-up into a standalone question using the last 3 exchanges
+(`HISTORY_TURNS_FOR_CONTEXT`). The LLM (`orchestrator_model`) is called only when there is history
+**and** the message looks like a follow-up (a reference word such as it/that/they, a continuation
+like "and …"/"what about …", or ≤ 4 words); small talk ("thanks", "good morning") never triggers
+it. On any LLM failure the original message is used unchanged. Covers the flowchart's Level 1
+"conversation history" and Level 5 "coreference resolution".
+
+---
+
+## `backend/app/history/` (added 2026-09-24 — conversation history)
+
+### `history/store.py`
+**What it is**: conversation history in PostgreSQL (`ptc-postgres`). Creates two tables on startup
+if missing — `chat_sessions` (session_id, user_id, title, created/updated time) and
+`chat_messages` (every question and answer: content, the follow-up rewrite, route, sources, score,
+decision trace, 👍/👎 rating, request id). Provides `recent_turns` (for follow-ups — skips BLOCKED
+turns so rejected text is never fed to a model), `save_exchange`, `list_sessions`,
+`get_session_messages`, `delete_session`, `delete_all_sessions`, `set_rating`.
+
+**Security**: every query is filtered by the trusted `user_id` from the session bootstrap. A user
+can't read, rate, delete, or write into another user's conversation even with its session id.
+**Fail-soft**: if Postgres is down at startup, the chatbot still answers (without memory) and logs
+`history_store_unavailable`; only the `/api/history/*` endpoints return 503.
 
 ---
 
@@ -361,17 +443,25 @@ composer is now an auto-resizing multi-line `<textarea>` (Enter sends, Shift+Ent
 newline, grows up to 140px before scrolling); and a floating "scroll to latest message" button that
 appears once the transcript is scrolled away from the bottom.
 
+**2026-09-24 third refresh — professionalism pass**: the sidebar history list is now searchable
+(`#history-search`, filters by title) and grouped into "Today / Yesterday / Previous 7 days /
+Older" buckets by each conversation's last-activity timestamp — the common pattern in ChatGPT-style
+tools, previously missing here. The composer shows a live character counter (`#char-counter`,
+warns past 900/1000). A failed `/chat` request now renders as a distinct danger-styled message with
+a **Retry** button that resends the same query (`requestAnswerFor()` in `script.js`), instead of a
+plain unstyled error line. Esc now closes the context panel and, on mobile, the sidebar drawer.
+
 Layout is a sidebar (New Chat button + a history list) plus the main chat column — the standard
 chat-app pattern, and what the replica project's own frontend spec (§13) described. The sidebar
 deliberately uses one clean neumorphic shell: New Chat is a single colored action and History rows
 are flat with a slim active indicator, avoiding the distracting nested/double-rectangle background. The welcome state includes
 quick-question chips that place a suggested question into the composer without sending it.
-**History is
-client-side only right now** (saved in the browser's `localStorage`, capped at 50 conversations,
-collapsed into a `ptc_chat_sessions` / `ptc_active_session_id` pair of keys) — there is no
-backend conversation storage yet, so history won't follow you to another device or browser. Real
-server-side session/history storage is a later phase (master prompt §10.2 History Manager /
-§20 Context Manager), not built yet.
+**History is stored in PostgreSQL (updated 2026-09-24)**: every `/chat` request sends the
+conversation's `session_id`; on page load (and when the simulated group — i.e. the user — changes)
+the sidebar is loaded from `/api/history/sessions`. Delete, Clear all, and 👍/👎 ratings are sent to
+the server too. `localStorage` (`ptc_chat_sessions` / `ptc_active_session_id`, max 50) is now only
+a fast cache and the fallback when the history service is down. A follow-up answer shows a small
+"🔗 Understood as: …" note with the standalone question the bot actually answered.
 
 **Why `script.js` calls `/chat` with a relative path, not a full URL**: the replica project had a
 real bug where the frontend hardcoded one port while a deployment script used another. Since this
@@ -427,6 +517,11 @@ help, all five scope outcomes used by the current classifier, context-based ambi
 transformation, hierarchical intent/route decisions, and LangGraph terminal branches. Tests disable
 network/model classification so results stay fast and repeatable.
 
+### `tests/test_conversation_history.py` (added 2026-09-24)
+**What it is**: follow-up detection and rewriting (LLM faked, so it runs offline), plus Postgres
+store integration tests — recent turns skip BLOCKED, and a second user can't read/write/rate/delete
+another user's conversation. The store tests skip automatically if `ptc-postgres` isn't running.
+
 ### `tests/__init__.py`
 **What it is**: marks the test suite as a package and keeps future shared test helpers importable.
 
@@ -472,6 +567,13 @@ repository structure, the build order (§72), and the required phase-by-phase wo
 this build should trace back to a numbered section of this document. Section 73 lists everything
 still marked `[NEEDS SYTELINE CONFIRMATION]` — unresolved technical facts about the real SyteLine
 environment that must not be guessed.
+
+### `SyteLine_Chatbot_Integration_Requirements.docx` / `.pdf` (added 2026-09-24)
+**What it is**: the document to send to the SyteLine team. It explains how the chatbot will be embedded
+in WebClient (floating button → right-side panel, one login, screen context, SyteLine-enforced
+permissions), and lists 32 questions (A–H, 5 marked Blocker) with a blank "Answer" column plus a
+checklist of APIs/access to provide. The `.pdf` is the same content for email. Their answers resolve
+the `[NEEDS SYTELINE CONFIRMATION]` items in `ARCHITECTURE_DECISIONS.md` and unblock Phase 4.
 
 ### `ARCHITECTURE_DECISIONS.md`
 **What it is**: a decisions log, created because the flowchart diagrams the user supplied and the

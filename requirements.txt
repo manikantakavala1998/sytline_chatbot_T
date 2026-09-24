@@ -22,6 +22,8 @@ pydantic
 pydantic-settings
 python-multipart
 redis
+psycopg[binary]   # PostgreSQL driver — conversation history
+psycopg-pool
 
 # ── Utilities ─────────────────────────────────────────────────
 python-dotenv

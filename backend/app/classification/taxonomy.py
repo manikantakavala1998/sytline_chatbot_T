@@ -8,7 +8,7 @@ future SLM-training layers.
 
 from enum import Enum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SecurityLabel(str, Enum):
@@ -128,6 +128,10 @@ class QueryTransformResult(BaseModel):
     expanded_query: str
     entities: dict[str, list[str]] = Field(default_factory=dict)
     subqueries: list[str] = Field(default_factory=list)
+    # Retrieval-ready (glossary-expanded) version of each sub-question, searched separately.
+    expanded_subqueries: list[str] = Field(default_factory=list)
+    # "good_morning", "hi", ... when the message opened with a greeting before the real question.
+    leading_greeting: str | None = None
     transformations: list[str] = Field(default_factory=list)
 
 
@@ -145,4 +149,19 @@ class QueryClassification(BaseModel):
     tool_candidate: str | None = None
     confidence: float = Field(default=0.5, ge=0.0, le=1.0)
     reasoning_summary: str = "fallback classification"
+
+    # The LLM classifier returns null for `operation` on plain questions and a
+    # list for `entity` on multi-object questions; both used to fail validation
+    # and silently drop the request to the heuristic fallback.
+    @field_validator("operation", mode="before")
+    @classmethod
+    def _default_operation(cls, value):
+        return value or "READ"
+
+    @field_validator("entity", mode="before")
+    @classmethod
+    def _join_entities(cls, value):
+        if isinstance(value, list):
+            return ", ".join(str(item) for item in value) or None
+        return value
 

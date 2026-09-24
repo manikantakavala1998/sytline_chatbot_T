@@ -2,7 +2,7 @@
 
 ## End-to-end map and alternate paths
 
-A common path is contact/prospect → lead → opportunity → estimate/quote → customer → customer order and lines → fulfillment/shipment → invoice → A/R payment and follow-up. This is a navigation map, not a rule requiring every record. A lead can belong to an existing customer, an estimate can exist without a prior lead, and one order can have multiple lines, shipments, invoices, or payments. Returns and credit memos create additional branches. [Infor CRM overview](https://docs.infor.com/csi/10.x/en-us/csbiolh/sales_crm_user_cl_sl/mergedprojects/sl_custvend/other/overview/crm_overview.html) [Infor order entry steps](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html) [Infor A/R steps](https://docs.infor.com/csi/10.x/en-us/csbiolh/financials_user_cl_sl/lsm1454143881752.html)
+A common path is contact/prospect → lead → opportunity → estimate/quote → customer → customer order and lines → fulfillment/shipment → invoice → A/R payment and follow-up. This is a navigation map, not a rule requiring every record. A lead can belong to an existing customer, an estimate can exist without a prior lead, and one order can have multiple lines, shipments, invoices, or payments. Returns and credit memos create additional branches.
 
 **Section Summary:** Records form a linked commercial lifecycle with optional and repeated steps.
 
@@ -18,7 +18,7 @@ prospect to cash, end to end, CRM to cash, order to cash, lifecycle
 5. Inspect each Customer Order Line for line status, hold, availability, and shipped quantity.
 6. Inspect shipment transactions and invoice history; reconcile ordered, shipped, and invoiced quantities.
 7. Inspect A/R open items, payment applications, credit memos, and aging to determine the remaining balance.
-8. Record the latest customer interaction and unresolved next action. [Infor CRM scenario 3](https://docs.infor.com/csi/2026.x/en-us/csbiolh/sales_crm_user_cl_sl/lsm1454144070779.html) [Infor order invoicing](https://docs.infor.com/csi/10.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144031725.html)
+8. Record the latest customer interaction and unresolved next action.
 
 **Section Summary:** Follow identifiers and quantities from party to invoice and A/R rather than treating one status as the whole answer.
 
@@ -50,3 +50,21 @@ For an ambiguous request, ask for the entity and identifier (prospect, customer,
 
 ### Keywords
 clarification, form context, record ID, site, permissions
+
+## Record relationships and identifiers
+
+A prospect or customer identifies an organization; a sales contact identifies a person. A lead records interest; an opportunity records a possible deal; an estimate records a proposed commercial offer. A customer order has a header and one or more lines/releases. A line may have several shipment and invoice events over time, and an invoice may have several payments or credits. Keep those identifiers distinct when tracing a case. A customer PO is the customer's external reference; the SyteLine order number is the internal transaction reference.
+
+**Section Summary:** Link the correct organization, deal, order, line, shipment, invoice, and payment records.
+
+### Keywords
+prospect ID, opportunity number, estimate number, customer PO, order number, invoice number
+
+## Questions that need different answers
+
+“How do I create a Customer Order?” is a help/process question: explain the general Customer Orders and Customer Order Lines steps. “Has order CO123 shipped?” is a live-data question: check authorized shipment transactions. “Why can't this order ship?” needs actual hold, status, site, and availability data before deciding. “Show overdue invoices for this customer” needs an authorized A/R query with customer and as-of date. “Create a credit memo” or “release this order” is an action request and requires an explicitly approved future action workflow. The same nouns can appear in all five requests, so classify the intended operation as well as the module.
+
+**Section Summary:** Definition, procedure, diagnosis, live lookup, and action are distinct intents.
+
+### Keywords
+help intent, live data intent, action intent, order status, overdue invoice

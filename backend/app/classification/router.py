@@ -94,10 +94,21 @@ def _heuristic_classification(
     tool_candidate: str | None = None
     operation = "READ"
 
-    if re.fullmatch(r"(?:hi|hello|hey|good morning|good afternoon|good evening)", text):
+    greeting_phrase_match = re.fullmatch(
+        r"(hi|hello|hey|good morning|good afternoon|good evening)"
+        r"(?:[,!\s]+(?:there|team|everyone|folks|all|how are you|how'?s it going))?",
+        text,
+    )
+    if greeting_phrase_match:
         intent, route = IntentLabel.GREETING, RouteLabel.DIRECT_RESPONSE
-        sub_intent = "greeting"
-    elif re.fullmatch(r"(?:how are you|how(?:'s| is) it going)", text):
+        sub_intent = greeting_phrase_match.group(1).replace(" ", "_")
+    elif re.fullmatch(
+        r"(?:how (?:are|r) (?:you|u)(?: doing)?|hru|how have you been|how do you do"
+        r"|how(?:'s| is) (?:it going|your day|everything|life)"
+        r"|are you (?:ok|okay|well|good|fine|doing well))"
+        r"(?:\s+(?:today|now|there|buddy|friend))?",
+        text,
+    ):
         intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "wellbeing"
     elif re.fullmatch(r"what(?:'s| is) up", text):
         intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "casual_checkin"

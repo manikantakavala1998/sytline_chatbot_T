@@ -2,7 +2,7 @@
 
 ## How to use this guide
 
-Form titles and labels are from general Infor CSI/SyteLine help. Field availability, requiredness, default, editable state, and internal property name depend on release, license, role, site, and customization. The entries below explain the business meaning and where to inspect a field; they are not a confirmed IDO schema. A field shown on a read-only related tab is maintained on its owning form. **[NEEDS SYTELINE CONFIRMATION]** applies to all IDO, property, method, API, and row-filter mappings. [Infor web forms](https://docs.infor.com/csi/2026.x/en-us/csbiolh/admin_cl_sl/xoy1567550426603.html)
+Form titles and labels are from general Infor CSI/SyteLine help. Field availability, requiredness, default, editable state, and internal property name depend on release, license, role, site, and customization. The entries below explain the business meaning and where to inspect a field; they are not a confirmed IDO schema. A field shown on a read-only related tab is maintained on its owning form. **[NEEDS SYTELINE CONFIRMATION]** applies to all IDO, property, method, API, and row-filter mappings.
 
 **Section Summary:** Use displayed labels for help; inspect the deployed site before using a field in an API.
 
@@ -20,7 +20,7 @@ form field, field help, form map, IDO property, screen context
 | Leads | Prospect or Customer, source, quality, status | Interest record; select one party type and interpret status via configured Lead Statuses. |
 | Leads | Related opportunities, estimates, orders | Read-only trace of downstream work; open owning form to change data. |
 
-Lead Statuses are required configuration values; the labels and meaning are organization-defined. [Infor CRM recommended setup](https://docs.infor.com/csi/2026.x/en-us/csbiolh/sales_crm_user_cl_sl/lsm1454144069328.html) [Infor Leads](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/forms/crmtopics/leads.htm) [Infor CRM scenario 1](https://docs.infor.com/csi/2026.x/en-us/csbiolh/sales_crm_user_cl_sl/lsm1454144070654.html)
+Lead Statuses are required configuration values; the labels and meaning are organization-defined.
 
 **Section Summary:** A person, prospect company, lead, and interaction are separate records connected by references.
 
@@ -38,7 +38,7 @@ Sales Contacts, Prospects, Leads, lead status, Prospect Interactions
 | Opportunity Tasks | Type, owner, priority, due date, mandatory, completion date | Actions agreed by the team. |
 | Opportunities related tabs | Estimates, Orders, Competitors, Team Members | Links or read-only views maintained in the corresponding form. |
 
-Opportunity Statuses are required setup; sources, stages, reasons, and task types are optional classifications. [Infor Opportunities](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/forms/crmtopics/opportunities.htm) [Infor creating opportunities](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/other/process/creating_managing_opportunities.htm)
+Opportunity Statuses are required setup; sources, stages, reasons, and task types are optional classifications.
 
 **Section Summary:** Forecast fields, outcome fields, tasks, and later order links answer different questions.
 
@@ -56,7 +56,7 @@ Opportunities form, Opportunity Tasks, Estimated Value, Projected Close Date
 | Estimate Lines | Status, Unit Price, Sales Disc, Source | Line state, price, discount, and optional supply/job link. |
 | Estimate Response Form Report | Print Price and output | Customer-facing proposal; inspect before sending. |
 
-When quantity changes on an Estimate Line, SyteLine may offer price recalculation; check the saved value. [Infor creating estimate](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/other/process/creating_an_estimate.htm) [Infor creating estimate lines](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/other/process/creating_estimate_lines.htm) [Infor CRM scenario 3](https://docs.infor.com/csi/2026.x/en-us/csbiolh/sales_crm_user_cl_sl/lsm1454144070779.html)
+When quantity changes on an Estimate Line, SyteLine may offer price recalculation; check the saved value.
 
 **Section Summary:** Estimate header holds quote terms; lines hold item detail; the report is the customer document.
 
@@ -73,7 +73,7 @@ Estimates form, Estimate Lines, Quote Date, Expiration Date, Sales Disc
 | Customer Ship Tos | Ship-to number, address, contact, codes | Delivery location selected by an order. |
 | Customers CRM tab | Territory, sales contacts, classification | Relationship and reporting data. |
 
-The customer can have one bill-to and multiple ship-tos; current terms may have restrictions with other invoicing options. [Infor creating a customer](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/creating_a_customer.html)
+The customer can have one bill-to and multiple ship-tos; current terms may have restrictions with other invoicing options.
 
 **Section Summary:** Customer master, bill-to, and selected ship-to must be checked independently.
 
@@ -91,7 +91,7 @@ Customers form, Customer Ship Tos, billing terms, Credit Limit
 | Customer Order Lines | Unit Price, discount, source, site | Pricing and fulfillment source. |
 | Customer Order Lines | Ready to Ship, shipped/invoiced quantity, Invoice Hold | Operational progress; verify in reports and transactions. |
 
-For blanket orders, inspect blanket lines and releases separately. A saved line may remain Planned after a credit check. [Infor Customer Orders](https://docs.infor.com/csi/9.01.x/en-us/csbiolh/mergedprojects/sl_custvend/forms/cotopics/order_maintenance.htm) [Infor order entry steps](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/mergedprojects/sl_custvend/other/process/order_entry_steps.html) [Infor Customer Order Lines](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/ucm1528917030675.html)
+For blanket orders, inspect blanket lines and releases separately. A saved line may remain Planned after a credit check.
 
 **Section Summary:** Header status, line status, holds, shipped quantity, and invoice hold answer distinct questions.
 
@@ -110,9 +110,33 @@ Customer Orders, Customer Order Lines, Due Date, Ready to Ship, Invoice Hold
 | A/R Payments / A/R Payment Distributions | Payment number/type, customer, amount, applied invoice | Cash receipt and allocation. |
 | A/R Aging Report | As-of date, buckets, customer, currency | Open balance view for collections. |
 
-Never infer a live customer balance, invoice amount, shipment status, or payment status from this catalog. [Infor shipping customer orders](https://docs.infor.com/csi/2026.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144032599.html) [Infor order invoicing](https://docs.infor.com/csi/10.x/en-us/csbiolh/customer_svc_user_cl_sl/lsm1454144031725.html) [Infor A/R steps](https://docs.infor.com/csi/10.x/en-us/csbiolh/financials_user_cl_sl/lsm1454143881752.html)
+Never infer a live customer balance, invoice amount, shipment status, or payment status from this catalog.
 
 **Section Summary:** Shipment, billing, and cash application live in separate transactions and reports.
 
 ### Keywords
 Order Shipping, To Be Invoiced, A/R Payments, A/R Aging Report
+
+## Frequently asked field meanings
+
+| Field | Form context | Plain-language meaning |
+| --- | --- | --- |
+| Lead Status | Leads | The configured state of a sales interest. The organization's status list gives the precise meaning. |
+| Opportunity Stage | Opportunities | The configured step in pursuing a potential sale; separate from a won/lost outcome. |
+| Projected Close Date | Opportunities | Expected sales decision timing, not a promised ship date. |
+| Expiration Date | Estimates | Date after which the offer should be revalidated before use. |
+| Qty Ordered | Estimate Lines or Customer Order Lines | Requested amount of the line item, with its unit of measure. |
+| Due Date | Customer Order Lines | The line's scheduled need or delivery target; inspect site-specific semantics and related dates. |
+| Unit Price | Estimate Lines or Customer Order Lines | Proposed or booked price per unit before the complete transaction total is built. |
+| Credit Hold | Customers or Customer Orders | Account-level or order-level shipping restriction; check both forms. |
+| Ship Partial | Customer Orders | Influences whether an order with some ready lines appears in availability reporting; does not itself authorize a fraction of one line. |
+| Invoice Hold | Customer Order Lines | Prevents eligible shipped line quantity from normal invoice processing while selected. |
+| Terms Code | Customer, estimate, or order | Billing/payment terms used in due-date scheduling under configuration. |
+| Apply To | A/R payment/distribution | The open invoice or other item to which a receipt is allocated. |
+
+For any field-help answer, state the form and record level. A Due Date on an order line, an invoice due date, and an opportunity projected close date serve different purposes. If the user asks for the current field's actual value, read the authorized live record rather than inferring a value from this guide.
+
+**Section Summary:** Field names require form context and sometimes live values.
+
+### Keywords
+Due Date, Projected Close Date, Terms Code, Unit Price, Credit Hold, Invoice Hold

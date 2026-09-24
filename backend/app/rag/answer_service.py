@@ -33,7 +33,11 @@ If the context does not contain the answer, say so plainly rather than guessing.
 
 Keep the answer concise and direct. Use a numbered list for step-by-step instructions. \
 Do not mention "the context" or "the documents" out loud — just answer naturally, as if you \
-already knew this."""
+already knew this.
+
+Be polite and professional, like a helpful colleague — never curt or robotic. If the answer \
+isn't in the context, say so courteously and suggest what the user could ask instead, rather \
+than a flat refusal."""
 
 
 def build_context(chunks: list[MarkdownChunk]) -> str:

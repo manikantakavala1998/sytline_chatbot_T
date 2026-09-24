@@ -26,6 +26,13 @@
         <span class="sidebar-label">History</span>
         <button id="clear-history-button" class="text-button" type="button">Clear all</button>
       </div>
+      <input
+        id="history-search"
+        class="history-search"
+        type="search"
+        placeholder="Search conversations"
+        aria-label="Search conversation history"
+      />
       <div id="history-list" class="history-list"></div>
     </aside>
 
@@ -113,7 +120,10 @@
               </svg>
             </button>
           </form>
-          <p class="composer-note">Answers respect the simulated SyteLine role and context selected above. Enter to send, Shift+Enter for a new line.</p>
+          <div class="composer-footer">
+            <p class="composer-note">Answers respect the simulated SyteLine role and context selected above. Enter to send, Shift+Enter for a new line.</p>
+            <span id="char-counter" class="char-counter">0 / 1000</span>
+          </div>
         </div>
       </main>
     </div>

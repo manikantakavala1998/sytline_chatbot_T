@@ -13,6 +13,7 @@ from backend.app.classification.taxonomy import (
     SecurityResult,
 )
 from backend.app.context.manager import RequestContext
+from backend.app.history.store import Turn
 from backend.app.integrations.syteline.session_context import SyteLineUser
 
 
@@ -23,12 +24,19 @@ class WorkflowResult(BaseModel):
     sources: list[str] | None = None
     score: float = 0.0
     reason: str | None = None
+    resolved_query: str | None = None  # standalone rewrite of a follow-up, if one was made
     decision_trace: dict[str, object] = Field(default_factory=dict)
 
 
 class ChatWorkflowState(TypedDict, total=False):
     request_id: str
+    # `query` is what every step after follow-up resolution works on; for a follow-up
+    # like "how do I convert it?" it is the standalone rewrite, and `original_query`
+    # keeps what the user actually typed.
     query: str
+    original_query: str
+    history: list[Turn]
+    followup_resolved: bool
     context: RequestContext
     user: SyteLineUser
     security: SecurityResult
@@ -37,5 +45,8 @@ class ChatWorkflowState(TypedDict, total=False):
     transformed: QueryTransformResult
     classification: QueryClassification
     selected_route: RouteLabel
+    # Best curated Excel row for the question (qa_id, question-match score), handed from the
+    # Fast Q&A node to the unified search, which decides whether to show it verbatim.
+    qa_candidate: tuple[str, float]
     result: WorkflowResult
 

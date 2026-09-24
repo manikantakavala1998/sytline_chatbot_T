@@ -197,3 +197,90 @@ def test_chitchat_answers_match_the_detected_sub_intent(query, expected_text):
     result = ChatOrchestrator().run(query, make_context(), make_user())
     assert result.route == "DIRECT_RESPONSE"
     assert expected_text in (result.answer or "")
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_text"),
+    [
+        ("how are you doing", "I’m doing well"),
+        ("How are you doing today?", "I’m doing well"),
+        ("how r u", "I’m doing well"),
+        ("hru", "I’m doing well"),
+        ("How is your day?", "I’m doing well"),
+        ("are you ok", "I’m doing well"),
+        ("how have you been", "I’m doing well"),
+        ("hello, how are you?", "Hello! I’m doing well"),
+        ("good morning, how are you", "Good morning! I’m doing well"),
+    ],
+)
+def test_wellbeing_variants_get_a_wellbeing_answer(query, expected_text):
+    result = ChatOrchestrator().run(query, make_context(), make_user())
+    assert result.route == "DIRECT_RESPONSE"
+    assert (result.answer or "").startswith(expected_text)
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_start"),
+    [
+        ("good morning", "Good morning!"),
+        ("Good Evening!", "Good evening!"),
+        ("good afternoon team", "Good afternoon!"),
+        ("hi", "Hello!"),
+    ],
+)
+def test_time_of_day_greetings_are_echoed(query, expected_start):
+    result = ChatOrchestrator().run(query, make_context(), make_user())
+    assert result.route == "DIRECT_RESPONSE"
+    assert (result.answer or "").startswith(expected_start)
+
+
+@pytest.mark.parametrize(
+    ("query", "greeting", "clean"),
+    [
+        ("good morning, how do I set a credit limit?", "good_morning", "how do I set a credit limit?"),
+        ("Hello! Can you explain the invoice lifecycle?", "hello", "Can you explain the invoice lifecycle?"),
+        ("hi team, what is a customer order", "hi", "what is a customer order"),
+        ("good morning", None, "good morning"),
+        ("hello there", None, "hello there"),
+    ],
+)
+def test_leading_greeting_is_removed_before_retrieval(query, greeting, clean):
+    transformed = transform_query(query, make_context())
+    assert transformed.leading_greeting == greeting
+    assert transformed.rewritten_query == clean
+
+
+def test_process_synonyms_reach_retrieval_query():
+    transformed = transform_query("Explain the invoice lifecycle", make_context())
+    assert "invoice process" in transformed.expanded_query
+    assert transformed.rewritten_query == "Explain the invoice lifecycle"
+
+
+def test_multi_question_gets_one_retrieval_query_per_question():
+    transformed = transform_query("What is a quotation and how is an invoice created?", make_context())
+    assert transformed.subqueries == ["What is a quotation", "how is an invoice created"]
+    assert len(transformed.expanded_subqueries) == 2
+
+
+def test_llm_classifier_payload_quirks_are_accepted():
+    from backend.app.classification.taxonomy import QueryClassification
+
+    parsed = QueryClassification.model_validate(
+        {"intent": "HELP_GENERIC", "operation": None, "entity": ["customer", "invoice"]}
+    )
+    assert parsed.operation == "READ"
+    assert parsed.entity == "customer, invoice"
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_search_text"),
+    [
+        ("Can you explain the invoice lifecycle?", "explain the invoice process"),
+        ("Could you please tell me how invoicing works?", "how invoicing works"),
+        ("please explain the shipment process", "explain the shipment process"),
+    ],
+)
+def test_polite_openers_are_removed_from_search_text_only(query, expected_search_text):
+    transformed = transform_query(query, make_context())
+    assert expected_search_text in transformed.expanded_query.lower()
+    assert transformed.rewritten_query == query

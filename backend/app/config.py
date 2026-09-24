@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     # containers — pymilvus's MilvusClient supports both via one URI.
     milvus_uri: str = "http://localhost:19531"
 
+    # Conversation history — ptc-postgres from docker-compose.yml, on 5433 so it
+    # never collides with a Postgres already installed on this machine. The
+    # defaults match the compose file's local-dev container only; set real
+    # values in .env for any shared environment.
+    postgres_host: str = "localhost"
+    postgres_port: int = 5433
+    postgres_db: str = "ptc_chat"
+    postgres_user: str = "ptc"
+    postgres_password: str = "ptc_local_dev"
+    # How many earlier question/answer pairs the bot reads to understand a follow-up.
+    history_turns_for_context: int = 3
+
 
 try:
     settings = Settings()

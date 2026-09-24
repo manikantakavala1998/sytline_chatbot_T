@@ -23,9 +23,53 @@ _SPELLING = {
 }
 
 
+# Retrieval-only rewrites (the answer model still sees the user's own words).
+# The knowledge base says "process", never "lifecycle": "Explain the invoice
+# lifecycle" found no evidence while "Explain the invoice process" scored 2.0.
+_PROCESS_SYNONYMS = re.compile(r"\blife[\s-]?cycle\b|\bjourney\b", flags=re.IGNORECASE)
+
+# Polite openers carry no search meaning but pushed the reranker score below the
+# evidence cutoff ("Can you explain the invoice lifecycle?" -> no answer).
+_POLITE_OPENER = re.compile(
+    r"^(?:(?:can|could|would|will) you(?: please)?|please|kindly|"
+    r"i (?:want|would like|need) to know|(?:can|could|may) i (?:know|ask)|tell me)\b[\s,]*",
+    flags=re.IGNORECASE,
+)
+
+# A greeting in front of a real question ("good morning, how do I ...") dragged
+# the retrieval score from 2.9 to -1.0, so it is removed before search and
+# classification, and remembered so the answer can greet back.
+_LEADING_GREETING = re.compile(
+    r"^(hi|hello|hey|good morning|good afternoon|good evening)"
+    r"(?:\s+(?:there|team|everyone|all))?[\s,!.:;-]+(?=\S)",
+    flags=re.IGNORECASE,
+)
+
+
 @lru_cache(maxsize=1)
 def _glossary() -> tuple[GlossaryEntry, ...]:
     return tuple(load_glossary())
+
+
+def _strip_leading_greeting(query: str) -> tuple[str, str | None]:
+    match = _LEADING_GREETING.match(query)
+    if not match:
+        return query, None
+    remainder = query[match.end():].strip()
+    if len(remainder.split()) < 2:
+        return query, None
+    return remainder, match.group(1).lower().replace(" ", "_")
+
+
+def _expand_for_retrieval(query: str) -> str:
+    text = query
+    while True:
+        stripped = _POLITE_OPENER.sub("", text, count=1)
+        if stripped == text or len(stripped.split()) < 2:
+            break
+        text = stripped
+    text = _PROCESS_SYNONYMS.sub("process", text)
+    return expand_query(text, list(_glossary()))
 
 
 def _normalize(query: str) -> str:
@@ -95,11 +139,15 @@ def transform_query(query: str, context: RequestContext) -> QueryTransformResult
     if normalized != query:
         transformations.append("unicode_whitespace_normalization")
 
-    rewritten, spelling_changed = _fix_spelling(normalized)
+    without_greeting, leading_greeting = _strip_leading_greeting(normalized)
+    if leading_greeting:
+        transformations.append("leading_greeting_removed")
+
+    rewritten, spelling_changed = _fix_spelling(without_greeting)
     if spelling_changed:
         transformations.append("spell_normalization")
 
-    expanded = expand_query(rewritten, list(_glossary()))
+    expanded = _expand_for_retrieval(rewritten)
     if expanded != rewritten:
         transformations.append("business_glossary_expansion")
 
@@ -117,6 +165,8 @@ def transform_query(query: str, context: RequestContext) -> QueryTransformResult
         expanded_query=expanded,
         entities=entities,
         subqueries=subqueries,
+        expanded_subqueries=[_expand_for_retrieval(part) for part in subqueries],
+        leading_greeting=leading_greeting,
         transformations=transformations,
     )
     log_event(
