@@ -156,6 +156,7 @@ body {
   justify-content: center;
   cursor: pointer;
   flex-shrink: 0;
+  text-decoration: none; /* covers the <a> version of this button (Attu link) */
   box-shadow: 4px 4px 8px var(--shadow-dark), -4px -4px 8px var(--shadow-light);
 }
 
