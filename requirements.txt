@@ -1,0 +1,32 @@
+# ── Core RAG (search + AI answers) ──────────────────────────
+sentence-transformers==2.7.0
+pymilvus
+rank-bm25
+openai
+
+# ── Data processing (Excel + Markdown reading) ──────────────
+pandas
+openpyxl
+numpy
+scikit-learn
+markdown
+beautifulsoup4
+lxml
+
+# ── API / web server ─────────────────────────────────────────
+fastapi
+uvicorn[standard]
+pydantic
+pydantic-settings
+python-multipart
+redis
+
+# ── Utilities ─────────────────────────────────────────────────
+python-dotenv
+torch
+transformers
+
+# Note: PDF / DOCX / PPTX / OCR libraries are not in here yet.
+# We only add those later, when we build the full document-ingestion
+# step (PDF manuals etc.) — no point installing heavy tools before
+# we need them.
