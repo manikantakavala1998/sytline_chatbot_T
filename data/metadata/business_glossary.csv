@@ -1,0 +1,16 @@
+canonical_term,synonyms,abbreviation,module,process
+Prospect,potential customer|lead contact,,CRM,Prospect
+Lead,inquiry|interested party,,CRM,Lead
+Opportunity,deal|potential sale,OPP,CRM,Opportunity
+Estimate,quote draft,EST,CRM,Estimate
+Quotation,quote|proposal,QUO,CRM,Quotation
+Customer,client|account,CUST,CRM,Customer
+Customer Order,sales order|order,CO,Order Entry,Customer Order
+Order Line,line item|order item,,Order Entry,Customer Order
+Due Date,delivery date|expected date,,Order Entry,Customer Order
+Credit Limit,credit ceiling|spending limit,,Accounts Receivable,Credit
+Credit Hold,credit block|order hold,,Accounts Receivable,Credit
+Shipment,delivery|dispatch,,Shipping,Shipment
+Invoice,bill,INV,Accounts Receivable,Invoice
+Payment,remittance|receipt,,Accounts Receivable,Payment
+Receivable,amount owed|outstanding balance,AR,Accounts Receivable,Payment

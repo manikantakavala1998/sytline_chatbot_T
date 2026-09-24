@@ -68,6 +68,64 @@ Phase 2 only has to change what's *inside* this file, not every place that calls
 **Why it exists**: per `ARCHITECTURE_DECISIONS.md` / `BUILD_ROADMAP.md` Phase 1 — the general
 engine gets built now, but with the security seam already in place, never bolted on after.
 
+### `models/embeddings.py`
+**What it is**: loads the embedding model (`BAAI/bge-base-en-v1.5`) exactly once and shares it —
+loading it is slow, so both Q&A search now and Markdown search later reuse this one instance.
+Has two functions: `embed()` for passage/document-side text, `embed_query()` for the user's
+question — bge-base-en-v1.5 expects a different instruction prefix on the query side only; using
+the same treatment for both sides was causing short technical phrases ("order line" vs "customer
+order") to get confused with each other.
+
+### `qa/loader.py`
+**What it is**: reads every `data/qa/prospect_to_cash/<level>.xlsx` file (one per Prospect-to-Cash
+stage) and keeps only rows marked `APPROVED` + `active`, per the master prompt's rule that only
+approved/active records may be used in production.
+
+### `qa/glossary.py`
+**What it is**: reads `data/metadata/business_glossary.csv` and uses it to recognize when a user's
+wording (a synonym or abbreviation, e.g. "credit ceiling", "CO") means the same thing as a formal
+term in the Q&A data ("Credit Limit", "Customer Order") — the acronym-expansion/synonym-mapping
+step from the master prompt's Fast Q&A pipeline (§9).
+
+### `qa/retriever.py`
+**What it is**: the actual Fast Q&A search — implements the pipeline from master prompt §9 exactly:
+normalize → glossary expansion → exact match → BM25 (keyword) → embedding similarity → combined
+hybrid score → a quality gate that decides between a confident answer (`FAST_QA_RESPONSE`), asking
+the user to clarify between close candidates (`CLARIFY`), or handing off to document search
+(`MARKDOWN_RAG`, not built yet). The score thresholds are starter values, explicitly not tuned —
+the master prompt insists these come from real evaluation later, not a guess.
+
+### `api/models.py`
+**What it is**: the `ChatRequest`/`ChatResponse` shapes for the `/chat` endpoint.
+
+---
+
+## `data/` (Phase 1)
+
+### `data/metadata/business_glossary.csv`
+**What it is**: the Prospect-to-Cash business glossary — canonical term, synonyms, abbreviation,
+module, process — for the ~15 terms from master prompt §60 (Prospect, Lead, Opportunity, ...,
+Receivable). Used by `qa/glossary.py`. A real data-governance asset per §57/§59
+(`PTC_Business_Glossary`) — edit this file directly to add more terms.
+
+### `data/qa/prospect_to_cash/*.xlsx`
+**What it is**: one Q&A Excel file per Prospect-to-Cash stage (`prospect.xlsx`, `lead.xlsx`,
+`opportunity.xlsx`, `estimate.xlsx`, `quotation.xlsx`, `customer.xlsx`, `customer_order.xlsx`,
+`customer_order_line.xlsx`, `pricing.xlsx`, `credit.xlsx`, `shipment.xlsx`, `invoice.xlsx`,
+`payment.xlsx`, `faq.xlsx`), each with the full column schema from master prompt §8 (not just
+Question/Answer) plus a `question_variations` sheet.
+
+**Why one file per level**: matches the level names the Markdown knowledge base will use later
+(§13), and lets each stage be reviewed/approved independently rather than one giant spreadsheet.
+Currently filled with placeholder/dummy content for structure-testing — replace with real,
+reviewed content before this goes anywhere near production, per §12's document-governance rule
+that only approved content may be ingested.
+
+### `scripts/generate_sample_qa.py`
+**What it is**: the generator that writes the files above. Re-run it any time to regenerate all
+14 files from the `LEVELS` dict inside it (it overwrites them). Add more dummy/starter rows here,
+or edit the `.xlsx` files directly once real content replaces the placeholders.
+
 ---
 
 > Living index of every file in this repository: what it is, why it exists, and what it's for.
