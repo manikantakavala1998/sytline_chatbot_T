@@ -38,11 +38,24 @@ const WELCOME_MESSAGE =
   "Quotations, Customer Orders, Credit, Shipments, Invoices, or Payments.";
 
 const QUICK_PROMPTS = [
-  "What is a Customer Order?",
-  "Explain customer credit limits",
-  "How does shipment processing work?",
-  "Explain the invoice lifecycle",
+  { emoji: "📦", text: "What is a Customer Order?" },
+  { emoji: "💳", text: "Explain customer credit limits" },
+  { emoji: "🚚", text: "How does shipment processing work?" },
+  { emoji: "🧾", text: "Explain the invoice lifecycle" },
 ];
+
+// Shown one at a time while waiting for a response — a *simulated* timed
+// progression, not literally synced to backend internals. The backend
+// answers in a single request/response today (no live stream of real
+// pipeline stages), so this is honest "looks staged" UX, not a claim that
+// these exact steps are happening right now on the server.
+const STATUS_STAGES = [
+  { emoji: "📖", label: "Reading your question" },
+  { emoji: "🔎", label: "Searching knowledge" },
+  { emoji: "🤔", label: "Thinking" },
+  { emoji: "✍️", label: "Answering" },
+];
+const STATUS_STAGE_INTERVAL_MS = 650;
 
 const STORAGE_SESSIONS_KEY = "ptc_chat_sessions";
 const STORAGE_ACTIVE_KEY = "ptc_active_session_id";
@@ -158,12 +171,7 @@ function renderWelcome() {
   const wrap = document.createElement("div");
   wrap.className = "welcome";
   wrap.innerHTML = `
-    <div class="welcome-icon">
-      <svg viewBox="0 0 24 24" width="22" height="22" fill="none">
-        <path d="M8 10h8M8 14h5M21 12a9 9 0 10-4.2 7.6L21 21l-1.2-3.9A8.96 8.96 0 0021 12z"
-              stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
-    </div>
+    <div class="welcome-icon" aria-hidden="true">👋</div>
     <h2>How can I help today?</h2>
     <p></p>
     <div class="quick-prompts" aria-label="Suggested questions"></div>
@@ -175,9 +183,9 @@ function renderWelcome() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "quick-prompt";
-    button.textContent = prompt;
+    button.innerHTML = `<span aria-hidden="true">${prompt.emoji}</span><span>${prompt.text}</span>`;
     button.addEventListener("click", () => {
-      inputEl.value = prompt;
+      inputEl.value = prompt.text;
       inputEl.focus();
     });
     prompts.appendChild(button);
@@ -198,10 +206,6 @@ function renderMessages(session) {
   messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
-const THUMB_UP_PATH =
-  "M7 11v9H4a1 1 0 01-1-1v-7a1 1 0 011-1h3zm0 0l4.5-7.5a1.5 1.5 0 012.6 1.5L13 9h5.2a2 2 0 " +
-  "011.98 2.29l-1 7A2 2 0 0117.2 20H10a3 3 0 01-3-3v-6z";
-
 function buildRatingGroup(sessionIdAtRender, messageId, currentRating) {
   const group = document.createElement("div");
   group.className = "message-rating";
@@ -210,13 +214,13 @@ function buildRatingGroup(sessionIdAtRender, messageId, currentRating) {
   upBtn.type = "button";
   upBtn.className = "rating-button up" + (currentRating === "up" ? " active" : "");
   upBtn.setAttribute("aria-label", "Mark this answer helpful");
-  upBtn.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none"><path d="${THUMB_UP_PATH}" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+  upBtn.textContent = "👍";
 
   const downBtn = document.createElement("button");
   downBtn.type = "button";
   downBtn.className = "rating-button down" + (currentRating === "down" ? " active" : "");
   downBtn.setAttribute("aria-label", "Mark this answer not helpful");
-  downBtn.innerHTML = `<svg viewBox="0 0 24 24" width="13" height="13" fill="none" style="transform: rotate(180deg)"><path d="${THUMB_UP_PATH}" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
+  downBtn.textContent = "👎";
 
   upBtn.addEventListener("click", () => {
     const newRating = setMessageRating(sessionIdAtRender, messageId, "up");
@@ -240,7 +244,7 @@ function renderMessage(text, sender, { route, source, sources, score, timestamp,
 
   const avatar = document.createElement("div");
   avatar.className = "avatar";
-  avatar.textContent = sender === "user" ? "Y" : "AI";
+  avatar.textContent = sender === "user" ? "🧑" : "🤖";
   avatar.setAttribute("aria-hidden", "true");
 
   const column = document.createElement("div");
@@ -305,21 +309,49 @@ function renderMessage(text, sender, { route, source, sources, score, timestamp,
 }
 
 let typingRow = null;
+let statusTimer = null;
 
 function showTyping() {
   typingRow = document.createElement("div");
   typingRow.className = "message bot";
   typingRow.innerHTML = `
-    <div class="avatar" aria-hidden="true">AI</div>
+    <div class="avatar" aria-hidden="true">🤖</div>
     <div class="bubble-column">
-      <div class="bubble"><div class="typing-dots"><span></span><span></span><span></span></div></div>
+      <div class="bubble status-bubble">
+        <span class="status-emoji" aria-hidden="true"></span>
+        <span class="status-label"></span>
+        <span class="typing-dots"><span></span><span></span><span></span></span>
+      </div>
     </div>
   `;
   messagesEl.appendChild(typingRow);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  const emojiEl = typingRow.querySelector(".status-emoji");
+  const labelEl = typingRow.querySelector(".status-label");
+  let stageIndex = 0;
+
+  const applyStage = () => {
+    const stage = STATUS_STAGES[stageIndex];
+    emojiEl.textContent = stage.emoji;
+    labelEl.textContent = stage.label;
+  };
+  applyStage();
+
+  statusTimer = window.setInterval(() => {
+    if (stageIndex < STATUS_STAGES.length - 1) {
+      stageIndex += 1;
+      applyStage();
+    }
+    // holds on the final stage ("Answering") until the real response arrives
+  }, STATUS_STAGE_INTERVAL_MS);
 }
 
 function hideTyping() {
+  if (statusTimer) {
+    window.clearInterval(statusTimer);
+    statusTimer = null;
+  }
   if (typingRow) {
     typingRow.remove();
     typingRow = null;
@@ -351,10 +383,7 @@ function renderHistoryList(sessions, activeId) {
     deleteBtn.type = "button";
     deleteBtn.className = "history-item-delete";
     deleteBtn.setAttribute("aria-label", "Delete this conversation");
-    deleteBtn.innerHTML =
-      '<svg viewBox="0 0 24 24" width="14" height="14" fill="none">' +
-      '<path d="M4 7h16M9 7V5a1 1 0 011-1h4a1 1 0 011 1v2m-8 0v12a1 1 0 001 1h6a1 1 0 001-1V7" ' +
-      'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    deleteBtn.textContent = "🗑️";
     deleteBtn.addEventListener("click", (event) => {
       event.stopPropagation();
       deleteSession(session.id);
