@@ -9,6 +9,14 @@
 <body>
   <div class="layout">
     <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">
+        <div class="sidebar-mark" aria-hidden="true">SL</div>
+        <div>
+          <strong>SyteLine AI</strong>
+          <span>Prospect-to-Cash workspace</span>
+        </div>
+      </div>
+
       <button id="new-chat-button" class="new-chat-button">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none">
           <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
@@ -16,9 +24,14 @@
         New Chat
       </button>
 
-      <div class="sidebar-label">History</div>
+      <div class="sidebar-row">
+        <span class="sidebar-label">History</span>
+        <button id="clear-history-button" class="text-button" type="button">Clear all</button>
+      </div>
       <div id="history-list" class="history-list"></div>
     </aside>
+
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
 
     <div class="main-column">
       <header class="app-header">
@@ -29,37 +42,34 @@
         </button>
         <div class="brand">
           <span class="brand-dot"></span>
-          <h1>Prospect-to-Cash Assistant</h1>
+          <div class="brand-copy">
+            <h1>Prospect-to-Cash Assistant</h1>
+            <span>Secure, context-aware SyteLine guidance</span>
+          </div>
         </div>
         <span id="context-summary" class="badge context-summary-badge"></span>
-        <a
-          href="http://localhost:3001"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="icon-button"
-          aria-label="Open Attu — browse stored vectors"
-          title="Open Attu (view vectors stored in Milvus)"
-        >
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-            <ellipse cx="12" cy="5" rx="8" ry="3" stroke="currentColor" stroke-width="2"/>
-            <path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5" stroke="currentColor" stroke-width="2"/>
-            <path d="M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6" stroke="currentColor" stroke-width="2"/>
-          </svg>
-        </a>
-        <button id="context-toggle" class="icon-button" aria-label="Simulated SyteLine context">
-          <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
-            <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/>
-            <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"
-                  stroke="currentColor" stroke-width="1.5"/>
-          </svg>
-        </button>
+        <div class="header-actions">
+          <span class="availability"><span></span>Assistant online</span>
+          <button id="context-toggle" class="context-button" aria-label="Toggle simulated SyteLine context" aria-expanded="false" title="Simulated SyteLine context">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none">
+              <path d="M12 15a3 3 0 100-6 3 3 0 000 6z" stroke="currentColor" stroke-width="2"/>
+              <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 11-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 110-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 114 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 110 4h-.09a1.65 1.65 0 00-1.51 1z"
+                    stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+            <span>Context</span>
+          </button>
+        </div>
       </header>
 
       <div id="context-panel" class="context-panel collapsed">
-        <p class="context-note">
-          No live SyteLine session is connected yet — pick a mock user/screen below to test how
-          permissions and context flow through the chatbot.
-        </p>
+        <div class="context-heading">
+          <div>
+            <span class="eyebrow">Development simulator</span>
+            <h2>SyteLine session context</h2>
+          </div>
+          <span class="mock-badge">Mock data</span>
+        </div>
+        <p class="context-note">Choose a test user and screen to preview permission-aware responses before a live SyteLine session is connected.</p>
         <div class="context-grid">
           <label>
             Simulated user group
@@ -85,30 +95,26 @@
       </div>
 
       <main class="chat-card">
-        <div id="messages" class="messages">
-          <div class="message bot">
-            <div class="bubble">
-              Hi! Ask me anything about the Prospect-to-Cash process — Prospects, Leads,
-              Opportunities, Quotations, Customer Orders, Credit, Shipments, Invoices, or Payments.
-            </div>
-          </div>
-        </div>
+        <div id="messages" class="messages"></div>
 
-        <form id="chat-form" class="input-bar">
-          <input
-            id="chat-input"
-            type="text"
-            placeholder="Ask a question, e.g. What is a Customer Order?"
-            autocomplete="off"
-            maxlength="1000"
-          />
-          <button type="submit" id="send-button" aria-label="Send">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
-              <path d="M4 12h15M13 6l7 6-7 6" stroke="currentColor" stroke-width="2"
-                    stroke-linecap="round" stroke-linejoin="round"/>
-            </svg>
-          </button>
-        </form>
+        <div class="composer">
+          <form id="chat-form" class="input-bar">
+            <input
+              id="chat-input"
+              type="text"
+              placeholder="Ask about orders, credit, shipments, invoices, or payments"
+              autocomplete="off"
+              maxlength="1000"
+            />
+            <button type="submit" id="send-button" aria-label="Send message">
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none">
+                <path d="M4 12h15M13 6l7 6-7 6" stroke="currentColor" stroke-width="2"
+                      stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </button>
+          </form>
+          <p class="composer-note">Answers respect the simulated SyteLine role and context selected above.</p>
+        </div>
       </main>
     </div>
   </div>
