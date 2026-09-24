@@ -10,6 +10,9 @@ recreated on every startup, same as the rest of this project's ingestion
 (editing content + restarting is the whole content-update workflow).
 """
 
+import socket
+from urllib.parse import urlparse
+
 from pymilvus import DataType, MilvusClient
 
 from backend.app.config import settings
@@ -24,9 +27,31 @@ OUTPUT_FIELDS = [
 _client: MilvusClient | None = None
 
 
+def check_reachable(timeout_seconds: float = 3.0) -> None:
+    """Fails fast with a clear message instead of pymilvus's own behavior,
+    which is to hang rather than error out when Milvus isn't running —
+    found this the hard way testing what happens if you start the app
+    before `docker compose up -d`. A no-op for a Milvus Lite (local file)
+    URI, which has nothing to reach over the network."""
+    parsed = urlparse(settings.milvus_uri)
+    if not parsed.hostname or not parsed.port:
+        return
+
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port), timeout=timeout_seconds):
+            return
+    except OSError as exc:
+        raise RuntimeError(
+            f"Can't reach Milvus at {settings.milvus_uri}. "
+            "Start this project's Docker containers first: `docker compose up -d`, "
+            "wait ~30-60s for them to report healthy (`docker ps`), then start the app again."
+        ) from exc
+
+
 def get_client() -> MilvusClient:
     global _client
     if _client is None:
+        check_reachable()
         _client = MilvusClient(settings.milvus_uri)
     return _client
 
