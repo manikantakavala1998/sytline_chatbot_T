@@ -15,10 +15,13 @@ from backend.app.classification.query_transformer import expand_for_retrieval, t
 from backend.app.classification.router import classify_and_route
 from backend.app.classification.scope import classify_scope
 from backend.app.classification.small_talk import greeting_key_from_label, parse_greeting
-from backend.app.classification.taxonomy import IntentLabel, QueryClassification, RouteLabel
+from backend.app.classification.taxonomy import EmotionLabel, IntentLabel, QueryClassification, RouteLabel
 from backend.app.history.store import Turn
 from backend.app.orchestration.state import ChatWorkflowState, WorkflowResult
 from backend.app.qa.retriever import get_qa_index
+from backend.app.quality import tone
+from backend.app.quality.answer_validator import LEAK_REASONS, validate_answer
+from backend.app.quality.tone import apply_tone, rules_mood, strongest, suggests_escalation, tone_instruction
 from backend.app.rag.answer_service import generate_answer
 from backend.app.rag.retriever import CONTEXT_CHAR_BUDGET, TOP_K_RERANKED, get_rag_index
 from backend.app.security.input_gate import evaluate_security
@@ -202,6 +205,25 @@ def _search_each_question(state: ChatWorkflowState):
     return chunks, scores, sources, per_query
 
 
+def _user_mood(state: ChatWorkflowState, classifier_mood: EmotionLabel) -> EmotionLabel:
+    """The user's mood from their RAW words and the conversation, strongest signal wins.
+
+    The classifier only sees the cleaned-up question ("!!!", CAPS and "still not working" are
+    gone), so its label is used only when the conversation LLM was unavailable.
+    """
+    raw = state.get("original_query") or state["query"]
+    rules = rules_mood(raw, state.get("history") or [])
+    conversation = state.get("conversation")
+    if conversation and conversation.source in ("llm", "cache"):
+        return strongest(conversation.mood, rules)
+    return strongest(classifier_mood, rules)
+
+
+def _mood(state: ChatWorkflowState) -> EmotionLabel:
+    classification = state.get("classification")
+    return classification.emotion if classification else EmotionLabel.NORMAL
+
+
 def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
     security = state.get("security")
     scope = state.get("scope")
@@ -218,6 +240,8 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
         "sub_intent": classification.sub_intent if classification else None,
         "complexity": classification.complexity.value if classification else None,
         "emotion": classification.emotion.value if classification else None,
+        # Phase 5 step 3 reads this to offer a support ticket.
+        "escalation": "suggest_ticket" if classification and suggests_escalation(classification.emotion) else "none",
         "selected_route": selected_route.value if selected_route else None,
         "tool_candidate": classification.tool_candidate if classification else None,
         "transformations": transformed.transformations if transformed else [],
@@ -414,7 +438,13 @@ class ChatOrchestrator:
 
     @staticmethod
     def _classification_node(state: ChatWorkflowState) -> dict:
-        return {"classification": classify_and_route(state["transformed"], state["context"])}
+        classification = classify_and_route(state["transformed"], state["context"])
+        mood = _user_mood(state, classification.emotion)
+        if mood != classification.emotion:
+            log_event(logger, "user_mood_adjusted", request_id=state["request_id"],
+                      classifier=classification.emotion.value, mood=mood.value)
+        classification.emotion = mood
+        return {"classification": classification}
 
     @staticmethod
     def _route_node(state: ChatWorkflowState) -> dict:
@@ -517,8 +547,8 @@ class ChatOrchestrator:
         if match.record and match.score >= 1.0 and not state["transformed"].subqueries:
             return {
                 "result": WorkflowResult(
-                    route="FAST_QA_RESPONSE",
-                    answer=_greet_back(state, match.record.answer),
+                    route="FAST_QA_RESPONSE", grounding="approved",
+                    answer=_greet_back(state, apply_tone(match.record.answer, _mood(state), tone.APPROVED)),
                     source=match.record.qa_id,
                     score=match.score,
                     decision_trace={**_decision_trace(state), "answer_source": "excel_exact_match"},
@@ -570,8 +600,8 @@ class ChatOrchestrator:
                 log_event(logger, "excel_answer_selected", request_id=state["request_id"], qa_id=record.qa_id)
                 return {
                     "result": WorkflowResult(
-                        route="FAST_QA_RESPONSE",
-                        answer=_greet_back(state, record.answer),
+                        route="FAST_QA_RESPONSE", grounding="approved",
+                        answer=_greet_back(state, apply_tone(record.answer, _mood(state), tone.APPROVED)),
                         source=record.qa_id,
                         score=1.0,
                         decision_trace={**_decision_trace(state), "answer_source": "excel_exact_match"},
@@ -616,8 +646,8 @@ class ChatOrchestrator:
             log_event(logger, "excel_answer_selected", request_id=state["request_id"], qa_id=record.qa_id)
             return {
                 "result": WorkflowResult(
-                    route="FAST_QA_RESPONSE",
-                    answer=_greet_back(state, record.answer),
+                    route="FAST_QA_RESPONSE", grounding="approved",
+                    answer=_greet_back(state, apply_tone(record.answer, _mood(state), tone.APPROVED)),
                     source=record.qa_id,
                     score=round(qa_candidate[1], 2),
                     decision_trace={
@@ -634,8 +664,12 @@ class ChatOrchestrator:
                     route="NO_ANSWER",
                     answer=_greet_back(
                         state,
-                        "I don’t have enough approved information to answer that yet. "
-                        "Try naming the specific form, field, or step you’re working on.",
+                        apply_tone(
+                            "I don’t have enough approved information to answer that yet. "
+                            "Try naming the specific form, field, or step you’re working on.",
+                            _mood(state),
+                            tone.NOT_FOUND,
+                        ),
                     ),
                     decision_trace={**_decision_trace(state), **confidence_trace, "answer_source": "none"},
                 )
@@ -647,24 +681,48 @@ class ChatOrchestrator:
             request_id=state["request_id"],
             evidence_chunks=len(chunks),
         )
+        question = state["transformed"].rewritten_query
+        mood = _mood(state)
+        style = tone_instruction(mood)
         try:
-            answer = generate_answer(state["transformed"].rewritten_query, chunks)
+            answer = generate_answer(question, chunks, tone=style)
         except Exception:
             logger.exception("event=answer_generation_failed request_id=%s", state["request_id"])
             raise
 
+        # Hallucination guard: every claim must come from the evidence; repair once, else refuse.
+        validation = validate_answer(
+            question,
+            answer,
+            chunks,
+            request_id=state["request_id"],
+            regenerate=lambda claims: generate_answer(question, chunks, avoid_claims=claims, tone=style),
+        )
         source_labels = [f"{chunk.source_file} — {chunk.full_context_path}" for chunk in chunks]
         used = sorted(set(sources))
+        route = "MARKDOWN_RAG_RESPONSE"
+        if validation.action in ("not_found", "replaced"):
+            route = "NO_ANSWER"  # counted as unanswered, never as a document answer
         return {
             "result": WorkflowResult(
-                route="MARKDOWN_RAG_RESPONSE",
-                answer=_greet_back(state, answer),
-                sources=source_labels,
+                route=route,
+                answer=_greet_back(
+                    state,
+                    apply_tone(
+                        validation.answer,
+                        mood,
+                        tone.NOT_FOUND if route == "NO_ANSWER" else tone.GENERATED,
+                    ),
+                ),
+                sources=None if validation.reason in LEAK_REASONS else source_labels,
                 score=max(scores) if scores else 0.0,
+                reason=validation.reason,
+                grounding=validation.action,
                 decision_trace={
                     **_decision_trace(state),
                     **confidence_trace,
                     "answer_source": "generated_from_" + "_and_".join(used),
+                    **validation.trace(),
                 },
             )
         }

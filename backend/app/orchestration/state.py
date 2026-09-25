@@ -26,6 +26,9 @@ class WorkflowResult(BaseModel):
     score: float = 0.0
     reason: str | None = None
     resolved_query: str | None = None  # standalone rewrite of a follow-up, if one was made
+    # Answer validation outcome for generated answers: passed | repaired | replaced |
+    # not_found | unverified. "approved" for curated Excel answers; None for templates.
+    grounding: str | None = None
     decision_trace: dict[str, object] = Field(default_factory=dict)
 
 

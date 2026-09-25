@@ -42,6 +42,7 @@ class ChatResponse(BaseModel):
     decision_trace: dict | None = None  # safe labels only; never raw prompts/answers/tokens
     message_id: int | None = None  # the stored answer's id in Postgres (used for 👍/👎 ratings)
     resolved_query: str | None = None  # how a follow-up was understood, e.g. "it" -> "a quotation"
+    grounding: str | None = None  # answer check: approved | passed | repaired | replaced | not_found | unverified
 
 
 class RatingRequest(BaseModel):

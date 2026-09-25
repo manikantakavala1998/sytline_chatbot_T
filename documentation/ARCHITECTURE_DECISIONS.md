@@ -172,6 +172,34 @@ word-list greeting detection as the primary path and the separate follow-up call
 - Future: fold this call and the intent classifier into one call to save ≈1 s per business
   question; Phase 7's SLM can take over the same JSON contract.
 
+### 12. Every generated answer is validated against its evidence before it is sent (2026-09-25)
+**Decision (Phase 5 step 1): `quality/answer_validator.py` runs rule checks (leaks, read-only
+action claims, invented numbers) and a `gpt-4.1-mini` grounding check on every generated answer.
+Unsupported claims → one regeneration without them; still unsupported → a safe refusal.**
+
+- Why: the answer prompt already says "context only", but a prompt is a request, not a guarantee.
+  A wrong SyteLine step or number is worse than no answer.
+- Refusals and "not in the documents" replies become `NO_ANSWER`, so Phase 5 step 4 can list
+  every unanswered question as a content gap.
+- Fail behaviour: leaks are always blocked (rules, no LLM needed). If the grounding LLM is down,
+  rule-clean answers are sent marked `unverified` rather than refusing every question.
+- Curated Excel answers shown word for word skip the check — they are SME-approved text.
+- Checker model: `gpt-4.1`, not `gpt-4.1-mini`. Mini was measured too literal (slang sweep fell
+  49/52 → 42/52 because it rejected supported steps); `gpt-4.1` gave 50/52 and still caught 4/4
+  invented forms, numbers, behaviours and buttons. Configurable via `ANSWER_VALIDATION_MODEL`.
+
+### 13. Mood is read from the raw message; it changes tone only (2026-09-25)
+**Decision (Phase 5 step 2): the conversation-understanding LLM returns the user's mood (F0–F4)
+alongside its other labels — no extra call — and `quality/tone.py` rules act as a floor and
+offline fallback. The strongest reading wins.**
+
+- Why not the classifier's emotion: it reads the cleaned-up question, which has already lost the
+  "!!!", CAPS, insults and "still not working" — it labelled almost everything F0.
+- Mood changes the answer's tone, explanation style and the support offer (F3/F4). It never
+  changes facts (the validator still runs after), security, permissions, or any refusal template.
+- SME-approved Excel answers are never rewritten for tone; they only get a short opener.
+- F3/F4 set `escalation: suggest_ticket` in the trace — the hook for step 3's support tickets.
+
 ---
 
 ## Still open — `[NEEDS SYTELINE CONFIRMATION]`

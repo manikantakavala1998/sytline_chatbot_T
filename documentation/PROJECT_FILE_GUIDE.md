@@ -293,7 +293,66 @@ paraphrases. How the orchestrator uses this to pick verbatim Excel vs a generate
 chunks (master prompt §34) — a deliberately simplified version of the full answer-generation
 prompt. Role-aware tone and RBAC scope enforcement (the replica pattern's big system prompt) land
 in Phase 5 per the roadmap; this only needs to prove grounded, cited answers work end to end,
-which it does.
+which it does. **Updated 2026-09-25**: `generate_answer(..., avoid_claims=[...])` regenerates an
+answer without the statements the answer validator flagged (see `quality/answer_validator.py`).
+
+---
+
+## `backend/app/quality/` (Phase 5 — answer quality, added 2026-09-25)
+
+### `quality/answer_validator.py`
+**What it is**: the hallucination guard. Every *generated* answer is checked against the evidence
+it came from before the user sees it (curated Excel answers shown word for word are SME-approved
+and skip it). Two layers:
+1. **Rule checks** (no LLM): leaked secrets or prompt text → the answer is replaced; claims that the
+   bot changed something in SyteLine ("I have released the hold") → flagged, the bot is read-only;
+   numbers that appear in neither the evidence nor the question → flagged (step numbering and
+   single digits are ignored).
+2. **Grounding check** (`ANSWER_VALIDATION_MODEL`, default `gpt-4.1`, JSON): lists invented forms,
+   fields, buttons, numbers, rules or behaviour (things the evidence doesn't contain), and says
+   whether the answer actually answers the question. `gpt-4.1-mini` was tried first and was too
+   literal — it rejected steps the documents clearly support (e.g. "record the lost reason").
+   Refusals are also detected by wording (a reply with ≥2 real steps is never a refusal).
+
+**Measured 2026-09-25**: invented form / number / behaviour / button all caught (4/4); 50-case
+regression 50/50; slang sweep 50/52 (was 49/52 — the 2 misses are real content gaps, now
+correctly `NO_ANSWER`). Generated answers take ≈5–8 s; a repair adds ≈2–4 s.
+
+**Outcome** (`grounding` in the API response, `validation` in the decision trace): `passed`;
+`repaired` (flagged claims → answer regenerated once without them → re-checked clean);
+`replaced` (still unsupported → a safe "I couldn't confirm this" message, route `NO_ANSWER`);
+`not_found` (the documents don't answer it → the polite "not available" reply, route `NO_ANSWER`,
+so it is counted as an unanswered question); `unverified` (grounding LLM unavailable, rule checks
+clean → answer sent, marked as not LLM-verified). Turn off with `ANSWER_VALIDATION_ENABLED=false`.
+**Cost/latency**: one extra `gpt-4.1` call (≈1–2 s) per generated answer; a repair adds one more
+answer call and check. The trace stores labels and counts only; flagged claim text goes only to
+the local log (`answer_validation_flagged`) for tuning.
+
+### `quality/tone.py` (Phase 5 step 2, added 2026-09-25)
+**What it is**: the tone manager — the answer fits the user's mood. Levels: **F0 normal**, **F1
+confused** (plain words, short steps, offer to explain more), **F2 complaint** (one short
+acknowledgement, then the fix), **F3 frustrated** (calm, one empathy sentence, most likely fix first),
+**F4 persistent** (says it's still unresolved, gives the *next* diagnostic step instead of repeating
+the same steps).
+
+**Where the mood comes from**: the conversation-understanding LLM now also returns `mood`, read from
+the user's raw words and the conversation (the classifier only sees the cleaned-up question, which
+has lost the "!!!", CAPS and "still not working"). `rules_mood` is a floor for obvious signals and
+the fallback when the LLM is down: phrases like "still not working", "already tried", "third time",
+a repeat of an earlier question (≥75% same topic words), insults / "fed up", CAPS, "!!", "don't
+understand", "???". A bare "still" or "again" in a normal question ("invoice still open") is **not**
+an emotion — the old classifier rule got that wrong, so `router._emotion` now uses these rules too.
+The strongest reading wins and is stored as `emotion` in the decision trace.
+
+**How it is applied**: generated answers get a style instruction added to the answer prompt (after
+the grounding rules; the validator still checks every claim). SME-approved Excel answers are never
+rewritten — they get a short opener in front ("No problem — here it is step by step."). F3/F4 add a
+support offer at the end and set `escalation: "suggest_ticket"` in the trace (step 3 turns this into
+a real ticket). **Never changed by mood**: facts, security blocks, out-of-scope and clarification
+replies, capability-pending replies, permissions.
+
+**Measured 2026-09-25**: 11/11 live messages got the right mood (English, Hinglish, emoji, CAPS, and
+a conversation that repeats the same credit-hold problem).
 
 ---
 
@@ -437,7 +496,8 @@ classifier's free-form chitchat labels (e.g. `CHECK_WELLBEING`) onto the canned 
 One `gpt-4.1-mini` JSON call reads the message (plus the last 3 turns) and returns: `kind` (greeting,
 wellbeing, thanks, farewell, identity, capabilities, acknowledgement, introduction, casual_checkin or
 business), `greeting` (good_morning / good_afternoon / good_evening / good_night / hello),
-`asked_wellbeing`, and `question` — the business request alone, greetings and pleasantries removed,
+`asked_wellbeing`, `mood` (F0–F4, added 2026-09-25 for the tone manager — see `quality/tone.py`),
+and `question` — the business request alone, greetings and pleasantries removed,
 follow-up references resolved ("how do I convert it?" → "How do I convert a quotation?") and
 translated to English for the English knowledge base. Because the LLM understands meaning, new
 wording, slang, typos, emoji and other languages ("mornin my dude", "top of the morning", "gn",
@@ -516,6 +576,9 @@ the sidebar is loaded from `/api/history/sessions`. Delete, Clear all, and 👍/
 the server too. `localStorage` (`ptc_chat_sessions` / `ptc_active_session_id`, max 50) is now only
 a fast cache and the fallback when the history service is down. A follow-up answer shows a small
 "🔗 Understood as: …" note with the standalone question the bot actually answered.
+**Answer check note (2026-09-25)**: answers that passed the Phase 5 validator show
+"✅ Checked against approved documents"; curated Excel answers show "✅ Approved answer" (read from
+the stored decision trace, so it survives a page reload).
 
 **Why `script.js` calls `/chat` with a relative path, not a full URL**: the replica project had a
 real bug where the frontend hardcoded one port while a deployment script used another. Since this
@@ -581,6 +644,19 @@ another user's conversation. The store tests skip automatically if `ptc-postgres
 **What it is**: 80 greeting and small-talk edge cases — 24 greeting variants, 7 look-alikes that
 must NOT count as greetings, 25 chitchat variants, greeting + question stripping, the exact reply
 text for each case, and scope keeping them in scope. Runs offline (LLM disabled).
+
+### `tests/test_answer_validation.py` (added 2026-09-25)
+**What it is**: 35 tests for the answer validator with a faked grounding LLM — unsupported
+numbers, step numbering ignored, read-only action claims vs normal instructions, secret/prompt
+leaks replaced without an LLM call, and every outcome (passed, repaired, replaced, not_found,
+unverified, disabled). Runs offline.
+
+### `tests/test_tone.py` (added 2026-09-25)
+**What it is**: 50 tests for the tone manager — 23 mood phrasings (including "still"/"again" in
+normal questions staying F0), repeated vs merely related questions, strongest-mood merge, approved
+text kept word for word, support offer only for F3/F4, lenient LLM mood labels, the conversation
+LLM's mood beating the classifier, the tone reaching the answer prompt after the grounding rules,
+and frustration never weakening a security block or a live-data refusal. Runs offline.
 
 ### `tests/__init__.py`
 **What it is**: marks the test suite as a package and keeps future shared test helpers importable.

@@ -134,6 +134,7 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         decision_trace=workflow_result.decision_trace,
         message_id=message_id,
         resolved_query=workflow_result.resolved_query,
+        grounding=workflow_result.grounding,
     )
 
 

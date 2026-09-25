@@ -21,6 +21,7 @@ from backend.app.classification.taxonomy import (
 )
 from backend.app.config import settings
 from backend.app.context.manager import RequestContext
+from backend.app.quality.tone import rules_mood
 from backend.app.utils.logger import get_logger, log_event
 
 logger = get_logger(__name__)
@@ -68,16 +69,9 @@ def _complexity(query: str, subqueries: list[str]) -> ComplexityLabel:
 
 
 def _emotion(query: str) -> EmotionLabel:
-    text = query.lower()
-    if re.search(r"\b(?:again|still|already told|third time|keeps happening)\b", text):
-        return EmotionLabel.PERSISTENT
-    if re.search(r"\b(?:angry|furious|ridiculous|useless|terrible|damn)\b", text):
-        return EmotionLabel.FRUSTRATED
-    if re.search(r"\b(?:complaint|unacceptable|not satisfied)\b", text):
-        return EmotionLabel.COMPLAINT
-    if re.search(r"\b(?:confused|don't understand|unclear|not sure)\b", text):
-        return EmotionLabel.CONFUSED
-    return EmotionLabel.NORMAL
+    # Shared with the tone manager. The old bare "still|again" rule marked normal questions
+    # like "customer paid but invoice still open" as a persistent complaint.
+    return rules_mood(query)
 
 
 def _heuristic_classification(

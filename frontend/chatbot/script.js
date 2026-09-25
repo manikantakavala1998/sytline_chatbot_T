@@ -231,6 +231,16 @@ function fromServerMessage(message) {
   };
 }
 
+// Phase 5 answer check: say when an answer was verified against the documents.
+function groundingNote(trace) {
+  if (!trace) return null;
+  if (trace.validation === "passed" || trace.validation === "repaired") {
+    return "✅ Checked against approved documents";
+  }
+  if (String(trace.answer_source || "").startsWith("excel_")) return "✅ Approved answer";
+  return null;
+}
+
 async function loadSessionsFromServer() {
   try {
     const response = await fetch(historyUrl("/sessions?include_messages=true"));
@@ -469,6 +479,13 @@ function renderMessage(
       understood.className = "resolved-note";
       understood.textContent = `🔗 Understood as: “${resolvedQuery}”`;
       column.appendChild(understood);
+    }
+    const checked = groundingNote(decisionTrace);
+    if (checked) {
+      const note = document.createElement("div");
+      note.className = "grounding-note";
+      note.textContent = checked;
+      column.appendChild(note);
     }
     if (citation) {
       const src = document.createElement("div");

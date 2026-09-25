@@ -31,6 +31,7 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from backend.app.classification.small_talk import chitchat_kind, clean, parse_greeting, strip_leading_greeting
+from backend.app.classification.taxonomy import EmotionLabel
 from backend.app.config import settings
 from backend.app.history.store import Turn
 from backend.app.utils.logger import get_logger, log_event
@@ -74,7 +75,20 @@ class ConversationAnalysis(BaseModel):
     # "create and issue a quotation"); the answer still uses the user's own words.
     search_query: str | None = Field(default=None, max_length=MAX_QUESTION_CHARS)
     followup_resolved: bool = Field(default=False, validation_alias="resolved_reference")
+    # The user's mood from their raw words and the conversation (Phase 5 tone manager).
+    mood: EmotionLabel = EmotionLabel.NORMAL
     source: str = "llm"  # llm | rules | cache
+
+    @field_validator("mood", mode="before")
+    @classmethod
+    def _lenient_mood(cls, value):
+        """Accept "F3", "frustrated", "F3_FRUSTRATED"; anything unknown is NORMAL."""
+        text = str(value or "").strip().upper()
+        for label in EmotionLabel:
+            code, name = label.value.split("_", 1)
+            if text in (label.value, code, name):
+                return label
+        return EmotionLabel.NORMAL
 
     @field_validator("greeting", mode="before")
     @classmethod
@@ -105,7 +119,8 @@ Return JSON only:
   "wellbeing_phrase": string or null,
   "question": string or null,
   "search_query": string or null,
-  "resolved_reference": true|false}}
+  "resolved_reference": true|false,
+  "mood": one of {[m.value for m in EmotionLabel]}}}
 
 Rules:
 - "greeting": the greeting the user opened with, mapped to its time of day ("gm", "gud mrng",
@@ -137,6 +152,14 @@ Rules:
   user's (a "how to" stays "How do I ..."), same meaning, same number of questions, English, no
   new facts. null when "question" is null.
 - "resolved_reference": true only if you replaced a reference using the conversation.
+- "mood": how the user feels, from their own words, punctuation, CAPS and the conversation.
+  F0_NORMAL: neutral, polite or casual (most messages; slang and typos are NOT frustration).
+  F1_CONFUSED: says they don't understand, are lost, or an earlier answer was unclear.
+  F2_COMPLAINT: unhappy with SyteLine, the process or an answer, but calm.
+  F3_FRUSTRATED: angry, insulting, swearing, shouting in CAPS, "!!!", "useless", "fed up".
+  F4_PERSISTENT: the SAME problem is still not solved — the conversation shows they already asked
+  it, or they say "still not working", "again", "third time", "already tried that".
+  A word like "still" in a normal business question ("invoice still open") is F0.
 - "kind": "business" whenever "question" is not null (even if the message also greets);
   otherwise the best small-talk kind; a greeting word wins ("hi, how are you" -> greeting)."""
 
@@ -202,7 +225,7 @@ def _llm_analysis(query: str, history: list[Turn]) -> ConversationAnalysis:
     response = _get_client().chat.completions.create(
         model=settings.orchestrator_model,
         temperature=0,
-        max_tokens=250,
+        max_tokens=280,
         response_format={"type": "json_object"},
         messages=[{"role": "system", "content": PROMPT}, {"role": "user", "content": content}],
     )
@@ -255,6 +278,7 @@ def analyze_message(query: str, history: list[Turn], request_id: str) -> Convers
         greeting=analysis.greeting.value if analysis.greeting else "none",
         asked_wellbeing=analysis.asked_wellbeing,
         followup_resolved=analysis.followup_resolved,
+        mood=analysis.mood.value,
         history_turns=len(history),
         source=analysis.source,
     )

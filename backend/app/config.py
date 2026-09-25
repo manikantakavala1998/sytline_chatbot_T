@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     orchestrator_timeout_seconds: float = 12.0
     temperature: float = 0.1
     max_tokens: int = 500
+    # Phase 5 hallucination guard: check every generated answer against its evidence.
+    answer_validation_enabled: bool = True
+    # gpt-4.1-mini was measured too literal for this judgement (it flagged steps the documents
+    # clearly support), so the grounding check uses the primary model.
+    answer_validation_model: str = "gpt-4.1"
 
     embedding_model: str = "BAAI/bge-base-en-v1.5"
     embedding_dim: int = 768

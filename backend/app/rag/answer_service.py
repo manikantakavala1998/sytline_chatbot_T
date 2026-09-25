@@ -46,16 +46,39 @@ def build_context(chunks: list[MarkdownChunk]) -> str:
     )
 
 
-def generate_answer(query: str, chunks: list[MarkdownChunk]) -> str:
+def generate_answer(
+    query: str,
+    chunks: list[MarkdownChunk],
+    avoid_claims: list[str] | None = None,
+    tone: str | None = None,
+) -> str:
+    """`avoid_claims`: statements the answer validator found unsupported in an earlier draft.
+    `tone`: style guidance for the user's mood (quality/tone.py) — never changes the facts."""
     context = build_context(chunks)
+    system = SYSTEM_PROMPT
+    if tone:
+        system += f"\n\nTone for this reply (style only — the rules above still come first): {tone}"
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": f"Retrieved Context:\n{context}\n\nQuestion: {query}"},
+    ]
+    if avoid_claims:
+        listed = "\n".join(f"- {claim}" for claim in avoid_claims)
+        messages.append({
+            "role": "user",
+            "content": (
+                "A previous draft of this answer included statements that the Retrieved Context does "
+                f"not support:\n{listed}\n\nWrite the answer again. Keep everything the context does "
+                "support, in the same helpful step-by-step style; only leave out or correct those "
+                "statements. You are read-only: never say you changed anything in SyteLine. Say the "
+                "context does not cover something only if nothing in it answers the question."
+            ),
+        })
 
     response = get_client().chat.completions.create(
         model=settings.primary_llm,
         temperature=settings.temperature,
         max_tokens=settings.max_tokens,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": f"Retrieved Context:\n{context}\n\nQuestion: {query}"},
-        ],
+        messages=messages,
     )
     return (response.choices[0].message.content or "").strip()
