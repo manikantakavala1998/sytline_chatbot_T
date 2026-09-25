@@ -45,6 +45,25 @@ Opportunity Statuses are required setup; sources, stages, reasons, and task type
 ### Keywords
 Opportunities form, Opportunity Tasks, Estimated Value, Projected Close Date
 
+## Campaigns, contacts, and forecasts
+
+| Owning form | Field or data group to inspect | Business meaning and next check |
+| --- | --- | --- |
+| Sales Contacts | Contact identity, organization link, communication details | Person-level record; verify current prospect/customer cross-reference and outreach rules. |
+| Sales Contact Groups | Group and members | Reusable audience; membership does not create a lead. |
+| Campaigns | Campaign identity, selected contacts, communications, related leads | Marketing activity and response trace; verify an explicit lead association. |
+| Campaign Items | Item and campaign association | Product or item context for the campaign, not an order line. |
+| Competitors / Opportunity Competitor Cross References | Competitor identity and opportunity association | Competitive context for a potential sale. |
+| Opportunity Member Cross References | Opportunity and salesperson/team member | Ownership and collaboration; the related opportunity tab may be display-only. |
+| Sales Forecasts | Sales Period, salesperson, Draft/Submitted status, included opportunity values | Expected sales view; not an invoice or actual booked amount. |
+
+For a current campaign response count or forecast total, request the campaign or sales period, owner, site, and permission-checked live records. Do not infer a number from this field catalog.
+
+**Section Summary:** Campaign membership, lead creation, opportunity ownership, and forecast submission are separate data relationships.
+
+### Keywords
+Campaigns form, Campaign Items, Sales Contact Groups, Sales Forecasts, Sales Periods
+
 ## Estimate and quotation
 
 | Owning form | Field or data group to inspect | Business meaning and next check |
@@ -97,6 +116,25 @@ For blanket orders, inspect blanket lines and releases separately. A saved line 
 
 ### Keywords
 Customer Orders, Customer Order Lines, Due Date, Ready to Ship, Invoice Hold
+
+## Blanket, drop-ship, and consolidated-billing fields
+
+| Owning form | Field or data group to inspect | Business meaning and next check |
+| --- | --- | --- |
+| Customer Orders | Type, originating site, ship-to, credit hold | Determines regular versus blanket flow and header-level restrictions. |
+| Customer Order Blanket Lines | Item, Blanket Quantity, Quantity Released, Line Status | Agreement quantity and how much is scheduled in releases. |
+| Customer Order Blanket Releases | Release number, date, quantity, status, Ready Quantity | Individual fulfillment obligation; check its shipping and invoicing history. |
+| Customer Order Lines / Blanket Releases | Drop Ship/Drop Ship To and ship-to sequence | Line-level destination that may differ from header ship-to. |
+| Customer Order Lines / Blanket Releases | Consolidated Invoice, Invoice Freq, Summarize Lines | Determines a nonstandard billing route and invoice presentation where eligible. |
+| Consolidated Invoices Workbench | Pending invoice header, lines, modified state | Review shipped lines selected for consolidated billing before posting. |
+| Consolidated Invoicing | Process range, print/post result, invoice number | Confirms whether a consolidated invoice was created and posted. |
+
+An EDI-origin order may be controlled by an integration workflow. Its partner-specific field mapping is **[NEEDS SYTELINE CONFIRMATION]**. A pending consolidated invoice is not the same as a posted A/R invoice.
+
+**Section Summary:** A blanket release and a consolidated invoice record require their own form-level checks.
+
+### Keywords
+Blanket Quantity, Quantity Released, Drop Ship To, Consolidated Invoice, Invoice Freq
 
 ## Shipment, invoice, and A/R
 

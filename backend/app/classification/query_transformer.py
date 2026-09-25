@@ -4,6 +4,7 @@ import re
 import unicodedata
 from functools import lru_cache
 
+from backend.app.classification.small_talk import Greeting, strip_leading_greeting
 from backend.app.classification.taxonomy import QueryTransformResult
 from backend.app.context.manager import RequestContext
 from backend.app.qa.glossary import GlossaryEntry, expand_query, load_glossary
@@ -36,14 +37,6 @@ _POLITE_OPENER = re.compile(
     flags=re.IGNORECASE,
 )
 
-# A greeting in front of a real question ("good morning, how do I ...") dragged
-# the retrieval score from 2.9 to -1.0, so it is removed before search and
-# classification, and remembered so the answer can greet back.
-_LEADING_GREETING = re.compile(
-    r"^(hi|hello|hey|good morning|good afternoon|good evening)"
-    r"(?:\s+(?:there|team|everyone|all))?[\s,!.:;-]+(?=\S)",
-    flags=re.IGNORECASE,
-)
 
 
 @lru_cache(maxsize=1)
@@ -51,14 +44,16 @@ def _glossary() -> tuple[GlossaryEntry, ...]:
     return tuple(load_glossary())
 
 
-def _strip_leading_greeting(query: str) -> tuple[str, str | None]:
-    match = _LEADING_GREETING.match(query)
-    if not match:
-        return query, None
-    remainder = query[match.end():].strip()
-    if len(remainder.split()) < 2:
-        return query, None
-    return remainder, match.group(1).lower().replace(" ", "_")
+# A greeting in front of a real question ("good morning buddy, how do I ...") dragged
+# the retrieval score from 2.9 to -1.0, so it is removed before search and
+# classification, and remembered so the answer can greet back (small_talk.py).
+def _strip_leading_greeting(query: str) -> tuple[str, Greeting | None]:
+    return strip_leading_greeting(query)
+
+
+def expand_for_retrieval(query: str) -> str:
+    """Public: the search-text preparation used for any retrieval query."""
+    return _expand_for_retrieval(query)
 
 
 def _expand_for_retrieval(query: str) -> str:
@@ -139,8 +134,8 @@ def transform_query(query: str, context: RequestContext) -> QueryTransformResult
     if normalized != query:
         transformations.append("unicode_whitespace_normalization")
 
-    without_greeting, leading_greeting = _strip_leading_greeting(normalized)
-    if leading_greeting:
+    without_greeting, greeting = _strip_leading_greeting(normalized)
+    if greeting:
         transformations.append("leading_greeting_removed")
 
     rewritten, spelling_changed = _fix_spelling(without_greeting)
@@ -166,7 +161,8 @@ def transform_query(query: str, context: RequestContext) -> QueryTransformResult
         entities=entities,
         subqueries=subqueries,
         expanded_subqueries=[_expand_for_retrieval(part) for part in subqueries],
-        leading_greeting=leading_greeting,
+        leading_greeting=greeting.key if greeting else None,
+        leading_wellbeing=bool(greeting and greeting.wellbeing),
         transformations=transformations,
     )
     log_event(

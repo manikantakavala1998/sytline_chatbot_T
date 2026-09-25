@@ -239,7 +239,7 @@ def test_time_of_day_greetings_are_echoed(query, expected_start):
     [
         ("good morning, how do I set a credit limit?", "good_morning", "how do I set a credit limit?"),
         ("Hello! Can you explain the invoice lifecycle?", "hello", "Can you explain the invoice lifecycle?"),
-        ("hi team, what is a customer order", "hi", "what is a customer order"),
+        ("hi team, what is a customer order", "hello", "what is a customer order"),
         ("good morning", None, "good morning"),
         ("hello there", None, "hello there"),
     ],
@@ -284,3 +284,36 @@ def test_polite_openers_are_removed_from_search_text_only(query, expected_search
     transformed = transform_query(query, make_context())
     assert expected_search_text in transformed.expanded_query.lower()
     assert transformed.rewritten_query == query
+
+
+@pytest.mark.parametrize(
+    ("query", "expected_route"),
+    [
+        ("What is the difference between an estimate and a quotation?", RouteLabel.MARKDOWN_RAG),
+        ("Compare a lead and an opportunity", RouteLabel.MARKDOWN_RAG),
+        ("Show the sales trend this quarter", RouteLabel.LLM_REASONING),
+        ("How many overdue invoices do we have?", RouteLabel.LLM_REASONING),
+    ],
+)
+def test_concept_analysis_uses_knowledge_but_live_figures_wait_for_phase_4(query, expected_route):
+    """Comparisons of concepts were sent to the unbuilt reasoning route and answered nothing."""
+    from backend.app.classification.router import _enforce_route_policy
+    from backend.app.classification.taxonomy import QueryClassification
+
+    routed = _enforce_route_policy(QueryClassification(intent=IntentLabel.ANALYSIS), query)
+    assert routed.route == expected_route
+
+
+@pytest.mark.parametrize(
+    ("query", "resolved", "expected"),
+    [
+        ("why can't i ship this order", True, "why can't i ship an order"),
+        ("How do I release the credit hold on this customer", True, "How do I release the credit hold on a customer"),
+        ("Show me this record", False, None),  # a data request still needs the record
+    ],
+)
+def test_explanations_about_an_unselected_record_are_answered_in_general(query, resolved, expected):
+    result = resolve_ambiguity(query, make_context())
+    assert result.resolved is resolved
+    if expected:
+        assert result.resolved_query == expected

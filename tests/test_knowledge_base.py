@@ -10,6 +10,7 @@ CORE_MODULES = {
     "prospect.md", "lead.md", "opportunity.md", "estimate.md", "quotation.md",
     "customer.md", "customer_order.md", "customer_order_line.md", "pricing.md",
     "credit.md", "shipment.md", "invoice.md", "payment.md", "faq.md",
+    "campaigns_and_forecasts.md", "order_and_billing_variations.md",
 }
 
 
@@ -26,5 +27,5 @@ def test_every_prospect_to_cash_article_is_chunked_with_unique_ids():
 def test_knowledge_articles_contain_complete_text_without_external_links():
     texts = [path.read_text(encoding="utf-8") for path in ROOT.glob("*.md")]
 
-    assert all("http://" not in text and "https://" not in text for text in texts)
+    assert all("http://" not in text and "https://" not in text and "](" not in text for text in texts)
     assert all("## " in text and "**Section Summary:**" in text for text in texts)

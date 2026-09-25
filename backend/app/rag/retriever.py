@@ -18,7 +18,6 @@ Ingestion (embed + index both sources) runs once at startup, same
 drop-and-recreate philosophy as the rest of the project.
 """
 
-import re
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -31,17 +30,20 @@ from backend.app.rag import milvus_store
 from backend.app.rag.markdown_processor import MarkdownChunk, process_all_markdown
 from backend.app.rag.reranker import rerank
 from backend.app.utils.logger import get_logger
+from backend.app.utils.search_tokens import search_tokens
 
 KNOWLEDGE_ROOT = BASE_DIR / "data" / "knowledge" / "prospect_to_cash"
 
 logger = get_logger(__name__)
 
 SOURCES = ("excel", "markdown")
-CANDIDATES_PER_SOURCE = 10
-TOP_K_RERANKED = 5
+# 20 per source (was 10): with ~130 Markdown sections, generic "customer order" sections
+# filled all 10 slots and the real shipment section never reached the reranker.
+CANDIDATES_PER_SOURCE = 20
+TOP_K_RERANKED = 6
 RRF_K = 60
 GUARANTEED_INCLUDE_VECTOR_SCORE = 0.80  # replica §7 step 8
-CONTEXT_CHAR_BUDGET = 6000
+CONTEXT_CHAR_BUDGET = 7000
 
 # Cross-encoder ms-marco-MiniLM-L-6-v2 outputs an unbounded logit, roughly
 # negative for irrelevant pairs and positive for relevant ones in practice.
@@ -51,7 +53,7 @@ EVIDENCE_THRESHOLD = -2.0
 
 
 def _tokenize(text: str) -> list[str]:
-    return re.sub(r"[^\w\s]", " ", text.lower()).split()
+    return search_tokens(text)
 
 
 def _reciprocal_rank_fusion(rankings: list[list[str]], k: int = RRF_K) -> dict[str, float]:

@@ -3,6 +3,7 @@ sentence-transformers==2.7.0
 pymilvus
 milvus-lite
 rank-bm25
+snowballstemmer   # word-form matching in keyword search (ship = shipment = shipping)
 openai
 langgraph
 

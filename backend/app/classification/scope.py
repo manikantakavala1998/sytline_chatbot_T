@@ -6,6 +6,7 @@ from functools import lru_cache
 
 from openai import OpenAI
 
+from backend.app.classification.small_talk import is_small_talk
 from backend.app.classification.taxonomy import ScopeLabel, ScopeResult
 from backend.app.config import settings
 from backend.app.context.manager import RequestContext
@@ -44,12 +45,6 @@ _COMPETITORS = re.compile(r"\b(?:sap|oracle ebs|oracle erp|netsuite|dynamics 365
 _GENERAL = re.compile(
     r"\b(?:weather|temperature|capital of|president of|stock price|recipe|cook|movie|sports score|"
     r"football|cricket|joke|poem|write a story|translate this|quantum physics)\b",
-    re.IGNORECASE,
-)
-_CHITCHAT = re.compile(
-    r"^(?:hi|hello|hey|good (?:morning|afternoon|evening)|how are you|how(?:'s| is) it going|"
-    r"what(?:'s| is) up|who are you|what can you do|nice to meet you|ok(?:ay)?|cool|"
-    r"thanks?|thank you|bye|goodbye)[?!. ]*$",
     re.IGNORECASE,
 )
 
@@ -122,7 +117,7 @@ def _llm_scope(query: str, context: RequestContext) -> ScopeResult:
 def classify_scope(query: str, context: RequestContext) -> ScopeResult:
     normalized = re.sub(r"\s+", " ", query.lower()).strip()
 
-    if _CHITCHAT.match(normalized):
+    if is_small_talk(query):
         result = ScopeResult(
             label=ScopeLabel.SYTELINE_RELATED,
             in_scope=True,

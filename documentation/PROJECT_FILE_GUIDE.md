@@ -140,6 +140,12 @@ the master prompt insists these come from real evaluation later, not a guess.
 ### `api/models.py`
 **What it is**: the `ChatRequest`/`ChatResponse` shapes for the `/chat` endpoint.
 
+### `utils/search_tokens.py` (added 2026-09-25)
+**What it is**: the one tokenizer for every BM25 keyword index (Excel Q&A and knowledge base):
+lower-case, punctuation removed, Snowball English stemming plus a trailing "-ment" strip, so word
+forms match ("how do I ship…" finds the shipment section). Same function on documents and
+questions, so matching stays consistent. Needs `snowballstemmer` (requirements.txt).
+
 ### `utils/logger.py`
 **What it is**: the central application logger. Every log line is written to both the terminal
 and one active file, `logs/chatbot.log`, using the same timestamped format. `log_event()` produces
@@ -199,10 +205,12 @@ Run with `python -m scripts.build_qa_from_knowledge` after editing the Markdown 
 Excel files).
 
 ### `data/knowledge/prospect_to_cash/*.md`
-**What it is**: 18 retrieval-ready, module-wise Markdown articles covering CRM setup; prospect,
+**What it is**: 20 retrieval-ready, module-wise Markdown articles covering CRM setup, campaigns and forecasts; prospect,
 lead, opportunity, estimate, quotation, customer, order header/line, pricing, credit, shipment,
-invoice, payment, follow-up, returns, form/field guidance, and cross-process tracing. The five
-original starter articles were corrected and expanded; the others were added before Phase 4.
+invoice, payment, follow-up, returns, order/billing variations, form/field guidance, and cross-process tracing. The five
+original starter articles were corrected and expanded; the others were added before Phase 4. The
+two gap-fill articles were added after the first 18-file Q&A generation; they are Markdown-only
+until Q&A is regenerated and reviewed.
 Every article uses heading hierarchy, `### Keywords`, and `**Section Summary:**` with complete
 plain-text guidance and no external links. See `PROSPECT_TO_CASH_KNOWLEDGE_BASE.md` for inventory, source policy,
 known limits, and verification. These are general vendor-guidance drafts, not approved site
@@ -257,6 +265,14 @@ Attu (http://localhost:3001) shows real columns; inserts are flushed, so the row
 embedding similarity alone, run only on the already-narrowed candidate pool.
 
 ### `retriever.py`
+**2026-09-25 search quality update**: keyword search is now **stemmed** (`utils/search_tokens.py`:
+ship = shipment = shipping), the candidate pool is **20 per source** (was 10) and **6** sections go to
+the answer (was 5, budget 7,000 chars). Measured on a 52-question slang/variant sweep across all
+modules: 39/52 → 49/52 answered from the right module; the remaining 3 are genuine content gaps
+("how to change payment terms / credit limit" steps are not in the knowledge base) or truly
+ambiguous ("what is so"), where the bot correctly declines to invent. `graph.py` runs
+**multi-query retrieval** — each single question is searched with the user's words and the LLM's
+standard-terminology version, each keeps its top 2, the rest fill by score.
 **What it is**: the actual Markdown RAG pipeline (master prompt §27) — vector search + BM25 in
 parallel, Reciprocal Rank Fusion to combine them, cross-encoder rerank, an evidence-sufficiency
 gate (starter threshold, tested against this project's own dummy data — not a benchmarked
@@ -350,6 +366,9 @@ glossary and trusted UI context before an LLM fallback. Never answers off-topic 
 **What it is**: the intent-agnostic ambiguity resolver. It runs before intent classification,
 resolves “this customer/field/screen” from trusted context when possible, and asks a targeted
 clarification when required context, detail, or version is missing or actions conflict.
+(2026-09-25) A why/how question about "this order" with nothing selected is answered in general
+("why can't I ship an order") plus a note to select the record for specifics, instead of only
+asking "which order?"; data requests ("show me this record") still ask for the record.
 
 ### `classification/query_transformer.py`
 **What it is**: selective preprocessing—normalization, focused spelling repair, glossary/acronym
@@ -367,10 +386,27 @@ Each decomposed sub-question gets its own search string in `expanded_subqueries`
 **What it is**: the initial structured LLM classifier and three-source route selector. The model
 can return only declared taxonomy values and allowlisted tool candidates; Python enforces the final
 intent-to-route policy and supplies a deterministic fallback. Greetings/chitchat bypass the model
-and retrieval entirely. The greeting pattern also accepts a short trailing pleasantry ("good
-morning, how are you", "hi team") and records which greeting was used as `sub_intent`
-(`good_morning`, `good_afternoon`, `good_evening`, `hi`, …) so `graph.py` can answer "Good morning!"
-back instead of one generic reply for every greeting.
+and retrieval entirely. ANALYSIS intents (2026-09-25 fix) go to the knowledge search unless they ask
+for live figures (trend, total, how many, this quarter…), which still wait for Phase 4 — before this,
+"What is the difference between an estimate and a quotation?" was labelled ANALYSIS by the LLM and
+answered "not enabled yet". Greeting and small-talk detection comes from `small_talk.py` (below); the
+greeting key is recorded as `sub_intent` (`good_morning`, `good_night`, `hello`, `+wellbeing`, …).
+
+### `classification/small_talk.py` (added 2026-09-25)
+**Role since the LLM step**: the **offline fallback** for `conversation.py` (used when the LLM is
+unavailable) and a cheap pre-check inside scope/classification. It is no longer the primary way
+greetings are understood.
+**What it is**: the single shared rule-based definition of greetings and small talk, used by scope, query
+transformation, classification and the direct-response reply. Before it,
+each of those had its own short pattern, so "good morning **buddy**" missed them all, fell through
+to the LLM, and got a generic "Hello!". It handles time-of-day greetings and typos (good morning,
+gud mrng, gm, good night), casual forms (hi/hiii, hey/heyyy, hello/helo, howdy, namaste), who is
+greeted (buddy, bro, team, sir, everyone, bot…), pleasantries ("how are you", "how's it going",
+"hope you are well" → the reply also says "I'm doing well, thank you for asking!"), any case,
+punctuation and emoji, and small talk (thanks bro, bye buddy, see you later, got it…). Guards:
+bare "morning"/"yo" only count as a greeting when they are the whole message ("morning shipment
+schedule" keeps its words), and "hi-tech customers" is not stripped. The reply always reads the
+greeting from the user's own words; the classifier's label is only a fallback.
 
 ### `orchestration/state.py`
 **What it is**: typed `ChatWorkflowState` and `WorkflowResult` contracts. State carries the trusted
@@ -382,11 +418,13 @@ context plus each level's result; the final API-safe decision trace contains lab
 Phase-4-or-later routes return `CAPABILITY_PENDING` instead of inventing ERP data or performing an
 unavailable navigation/action.
 
-Follow-up questions (added 2026-09-24): a `followup_resolution` node runs right after the security
-gate and before scope. With earlier turns from Postgres it rewrites "how do I convert it?" into
-"How do I convert a quotation?" (`classification/followup.py`), so scope/ambiguity/RAG all see a
-standalone question. `run()` takes the `history` list; the decision trace reports
-`history_turns_used` and `followup_resolved`.
+Conversation understanding (2026-09-25, replaces the 2026-09-24 `followup_resolution` node): a
+`conversation_understanding` node runs right after the security gate (`classification/conversation.py`).
+Pure small talk goes straight to `direct_response` — no scope check, search or classifier call.
+Business messages continue with the clean, standalone, English question as `query`, so
+scope/ambiguity/RAG never see greetings or unresolved "it". `run()` takes the `history` list; the
+decision trace reports `history_turns_used`, `followup_resolved`, `message_kind` and
+`conversation_source` (llm / cache / rules).
 
 Multi-question messages: the RAG node searches every sub-question separately
 (`_search_each_question`) and interleaves the top chunks round-robin under a 9,000-character
@@ -394,13 +432,29 @@ budget, so "What is a quotation and how is an invoice created?" retrieves both q
 invoice.md instead of only the dominant topic. `_normalize_chitchat_sub_intent` maps the LLM
 classifier's free-form chitchat labels (e.g. `CHECK_WELLBEING`) onto the canned replies.
 
-### `classification/followup.py` (added 2026-09-24)
-**What it is**: turns a follow-up into a standalone question using the last 3 exchanges
-(`HISTORY_TURNS_FOR_CONTEXT`). The LLM (`orchestrator_model`) is called only when there is history
-**and** the message looks like a follow-up (a reference word such as it/that/they, a continuation
-like "and …"/"what about …", or ≤ 4 words); small talk ("thanks", "good morning") never triggers
-it. On any LLM failure the original message is used unchanged. Covers the flowchart's Level 1
-"conversation history" and Level 5 "coreference resolution".
+### `classification/conversation.py` (added 2026-09-25 — replaces `followup.py`)
+**What it is**: LLM conversation understanding, run on every message right after the security gate.
+One `gpt-4.1-mini` JSON call reads the message (plus the last 3 turns) and returns: `kind` (greeting,
+wellbeing, thanks, farewell, identity, capabilities, acknowledgement, introduction, casual_checkin or
+business), `greeting` (good_morning / good_afternoon / good_evening / good_night / hello),
+`asked_wellbeing`, and `question` — the business request alone, greetings and pleasantries removed,
+follow-up references resolved ("how do I convert it?" → "How do I convert a quotation?") and
+translated to English for the English knowledge base. Because the LLM understands meaning, new
+wording, slang, typos, emoji and other languages ("mornin my dude", "top of the morning", "gn",
+"cheers mate", "namaste ji kaise ho", "buenos días") work without adding words to any list.
+**Business slang (2026-09-25)**: it also returns `search_query` — the same question in standard
+SyteLine wording ("how to raise the quotation" → "How do I create and issue a quotation?"; punch/book
+an order, cut an invoice, knock off a hold, collect money…). `graph.py` searches with it (single
+questions only) while the answer keeps the user's words. Before, "raise the quotation" scored
+below the evidence bar and got "no answer". The intent classifier (`router.py`) now reads the
+user's own question, not the search text, and is told "how do I …" is HELP_PROCESS, not ACTION —
+otherwise the command-like search text was misread as a transaction request.
+**Safety**: the model only labels and rewrites; replies to small talk come from fixed templates in
+`graph.py`, and every label is validated against an enum. "The user asked how we are" must be
+quoted (`wellbeing_phrase`) and is accepted only if those words are really in the message and are
+not the business question — the model had wrongly flagged "good morning, how do I convert it?". **Resilience**: LLM disabled, timeout or
+invalid JSON → the offline rules in `small_talk.py`. **Cost/latency**: ≈0.8–1 s per new message;
+pure small talk without history is cached in memory (512 entries), so repeats take ≈0.01 s.
 
 ---
 
@@ -518,9 +572,15 @@ transformation, hierarchical intent/route decisions, and LangGraph terminal bran
 network/model classification so results stay fast and repeatable.
 
 ### `tests/test_conversation_history.py` (added 2026-09-24)
-**What it is**: follow-up detection and rewriting (LLM faked, so it runs offline), plus Postgres
+**What it is**: conversation understanding with a faked LLM (follow-up rewrite, unseen wording,
+greeting + question, fallback to rules on timeout or invalid labels, caching), plus Postgres
 store integration tests — recent turns skip BLOCKED, and a second user can't read/write/rate/delete
 another user's conversation. The store tests skip automatically if `ptc-postgres` isn't running.
+
+### `tests/test_small_talk.py` (added 2026-09-25)
+**What it is**: 80 greeting and small-talk edge cases — 24 greeting variants, 7 look-alikes that
+must NOT count as greetings, 25 chitchat variants, greeting + question stripping, the exact reply
+text for each case, and scope keeping them in scope. Runs offline (LLM disabled).
 
 ### `tests/__init__.py`
 **What it is**: marks the test suite as a package and keeps future shared test helpers importable.
@@ -574,6 +634,51 @@ in WebClient (floating button → right-side panel, one login, screen context, S
 permissions), and lists 32 questions (A–H, 5 marked Blocker) with a blank "Answer" column plus a
 checklist of APIs/access to provide. The `.pdf` is the same content for email. Their answers resolve
 the `[NEEDS SYTELINE CONFIRMATION]` items in `ARCHITECTURE_DECISIONS.md` and unblock Phase 4.
+
+### `Prospect_to_Cash_Modules_and_Data_Preparation_Guide.docx` / `.pdf` (added 2026-09-24)
+**What it is**: a learning and content guide for the chatbot team and business users. Part A explains
+the 18 Prospect-to-Cash modules in process order (flow diagram, before/after for each, and the topics
+each knowledge file covers today — pulled from the `.md` files). Part B explains how to prepare the
+three data sources (knowledge `.md`, Excel Q&A, glossary CSV) with writing rules, a quality checklist
+and a weekly routine. Part C has fill-in templates for business users (module, Q&A, glossary).
+
+### `SyteLine_API_Requirements_and_RBAC.docx` / `.pdf` (added 2026-09-25)
+**What it is**: explains, for the SyteLine team, each of the 7 SyteLine API groups the chatbot needs
+(login token, user/permission data, form/field metadata, screen context, read-only business data,
+navigation, write actions — the last explicitly out of scope). For every API: what it is, why it is
+needed, a numbered step-by-step example (\"Priya the Sales Rep asks…\"), an illustrative Mongoose
+IDO REST request/response (marked to be confirmed), what breaks without it, how RBAC applies, and a
+\"please confirm\" table. Then an end-to-end sequence diagram (\"Why is order S000123 on hold?\"),
+the two RBAC layers, a same-question-two-users example, leak risks and protections, delivery
+priority, and a checklist. Companion to the Integration and RBAC requirement documents.
+
+### `SyteLine_RBAC_Permission_Requirements.docx` / `.pdf` (added 2026-09-25)
+**What it is**: the RBAC-focused request to the SyteLine team (companion to the integration
+requirements document). Explains how the chatbot uses permissions (read to explain, user's own
+token to enforce), then 24 questions in six groups — security model, reading permissions via API,
+field/record-level security, enforcement, changes/caching/audit, testing — with 7 marked Blocker and
+a blank Answer column; a deliverables checklist with a Provided column; and a test-user matrix
+(role × user ID, groups, sites, privileges per Prospect-to-Cash area) for them to fill. Its answers
+replace the mock permission data in `authorization/resolver.py` and `session_context.py`.
+
+### `Chatbot_Manual_Test_Cases.xlsx` (added 2026-09-25)
+**What it is**: 50 manual test cases covering every flowchart level — greetings/small talk (incl.
+typos and other languages), 6 security attacks + 1 legitimate security question, scope, ambiguity
+A2/A4/A5/A6, Excel Q&A, Markdown RAG, transformations (typos, abbreviation, polite opener, synonym,
+Spanish), multi-question/cross-module, three follow-up chats (F1–F3), live data / navigation /
+action (Phase 4) and a NO_ACCESS permission test. Each row has the exact question, expected route
+and badge, expected key points, and the reference answer captured from the live system (all 50
+passed on 2026-09-25), plus columns for the tester's badge, notes and Pass/Fail (dropdowns). Sheets:
+Test Cases, How to Test, Summary (auto-counts Pass/Fail per level).
+
+### `SyteLine_Chatbot_Technical_Specification.docx` / `.pdf` (added 2026-09-24)
+**What it is**: the full technical specification. It opens with one end-to-end flowchart of a chat
+message (14 numbered steps, decisions and early exits) plus a plain-English walk-through, then covers
+architecture and deployment, the request lifecycle with file/function per step, the trusted boundary,
+every LangGraph node (security, follow-up, scope, ambiguity, transformation, classification and route
+policy), unified retrieval with all constants, answer generation, the PostgreSQL schema, API, frontend,
+security, logging, configuration, tests, how to run it, the phase-by-phase development history with
+problems and fixes, the architecture decisions, known limitations and a file map.
 
 ### `ARCHITECTURE_DECISIONS.md`
 **What it is**: a decisions log, created because the flowchart diagrams the user supplied and the

@@ -10,6 +10,7 @@ import re
 
 from openai import OpenAI
 
+from backend.app.classification.small_talk import chitchat_kind, parse_greeting
 from backend.app.classification.taxonomy import (
     ComplexityLabel,
     EmotionLabel,
@@ -94,37 +95,13 @@ def _heuristic_classification(
     tool_candidate: str | None = None
     operation = "READ"
 
-    greeting_phrase_match = re.fullmatch(
-        r"(hi|hello|hey|good morning|good afternoon|good evening)"
-        r"(?:[,!\s]+(?:there|team|everyone|folks|all|how are you|how'?s it going))?",
-        text,
-    )
-    if greeting_phrase_match:
+    greeting = parse_greeting(query)
+    small_talk = chitchat_kind(query)
+    if greeting:
         intent, route = IntentLabel.GREETING, RouteLabel.DIRECT_RESPONSE
-        sub_intent = greeting_phrase_match.group(1).replace(" ", "_")
-    elif re.fullmatch(
-        r"(?:how (?:are|r) (?:you|u)(?: doing)?|hru|how have you been|how do you do"
-        r"|how(?:'s| is) (?:it going|your day|everything|life)"
-        r"|are you (?:ok|okay|well|good|fine|doing well))"
-        r"(?:\s+(?:today|now|there|buddy|friend))?",
-        text,
-    ):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "wellbeing"
-    elif re.fullmatch(r"what(?:'s| is) up", text):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "casual_checkin"
-    elif re.fullmatch(r"who are you", text):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "identity"
-    elif re.fullmatch(r"what can you do", text):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "capabilities"
-    elif re.fullmatch(r"(?:thanks?|thank you)", text):
-        intent, route = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE
-        sub_intent = "thanks"
-    elif re.fullmatch(r"nice to meet you", text):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "introduction"
-    elif re.fullmatch(r"(?:ok|okay|cool)", text):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "acknowledgement"
-    elif re.fullmatch(r"(?:bye|goodbye)", text):
-        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, "farewell"
+        sub_intent = greeting.key + ("+wellbeing" if greeting.wellbeing else "")
+    elif small_talk:
+        intent, route, sub_intent = IntentLabel.CHITCHAT, RouteLabel.DIRECT_RESPONSE, small_talk
     elif re.search(r"\b(?:create|add|update|change|delete|release|approve|post)\b", text):
         intent, route = IntentLabel.ACTION, RouteLabel.ACTION
         operation_match = re.search(r"\b(create|add|update|change|delete|release|approve|post)\b", text)
@@ -211,7 +188,10 @@ def _llm_classification(
                     f"tool_candidate must be null or one of: {', '.join(sorted(APPROVED_TOOL_CANDIDATES))}. "
                     "Use FAST_QA only for simple definitions. Use MARKDOWN_RAG for screens, fields, processes, "
                     "and troubleshooting. Current balances/status/open records are LIVE_DATA. Open/go-to is "
-                    "NAVIGATION. Any write/release/approve/post is ACTION. Never invent a tool name. Keep "
+                    "NAVIGATION. A request for the assistant to perform a write/release/approve/post is ACTION; "
+                    "a question about HOW to do it (\"how do I / how to / steps to create a quote\") is "
+                    "HELP_PROCESS, and a problem the user wants help fixing (\"order blocked by credit, "
+                    "fix?\", \"why can't I ...\") is TROUBLESHOOTING. Never invent a tool name. Keep "
                     "reasoning_summary under 12 words."
                 ),
             },
@@ -219,7 +199,10 @@ def _llm_classification(
                 "role": "user",
                 "content": json.dumps(
                     {
-                        "query": transformed.expanded_query,
+                        # The user's own (cleaned) question decides the intent. The expanded /
+                        # terminology search text can read like a command ("Create and issue a
+                        # quotation") and was misread as an ACTION request.
+                        "query": transformed.rewritten_query,
                         "subqueries": transformed.subqueries,
                         "entities": transformed.entities,
                         "context": {
@@ -241,7 +224,18 @@ def _llm_classification(
     return classification
 
 
-def _enforce_route_policy(classification: QueryClassification) -> QueryClassification:
+# Analysis that needs real ERP figures ("sales trend this quarter", "how many overdue invoices")
+# waits for the Phase 4 live-data connector. Analysis of concepts ("difference between an estimate
+# and a quotation", "compare lead and opportunity") is answered from the knowledge base — the LLM
+# classifier labels those ANALYSIS too, and sending them to an unbuilt route answered nothing.
+_LIVE_FIGURES = re.compile(
+    r"\b(?:trend|total|totals|how many|how much|count|sum|average|revenue|sales figures?|top \d+|"
+    r"this (?:week|month|quarter|year)|last (?:week|month|quarter|year)|ytd|mtd|kpi|dashboard|report on)\b",
+    re.IGNORECASE,
+)
+
+
+def _enforce_route_policy(classification: QueryClassification, query: str = "") -> QueryClassification:
     intent = classification.intent
     if intent in {IntentLabel.GREETING, IntentLabel.CHITCHAT, IntentLabel.FEEDBACK, IntentLabel.COMPLAINT}:
         classification.route = RouteLabel.DIRECT_RESPONSE
@@ -263,7 +257,7 @@ def _enforce_route_policy(classification: QueryClassification) -> QueryClassific
     elif intent == IntentLabel.HELP_GENERIC and classification.complexity == ComplexityLabel.DIRECT:
         classification.route = RouteLabel.FAST_QA
     elif intent == IntentLabel.ANALYSIS:
-        classification.route = RouteLabel.LLM_REASONING
+        classification.route = RouteLabel.LLM_REASONING if _LIVE_FIGURES.search(query) else RouteLabel.MARKDOWN_RAG
     elif intent == IntentLabel.MIXED:
         classification.route = RouteLabel.RAG_IDO
     elif intent == IntentLabel.UNKNOWN:
@@ -289,7 +283,7 @@ def classify_and_route(
     else:
         result = fallback
 
-    result = _enforce_route_policy(result)
+    result = _enforce_route_policy(result, transformed.rewritten_query)
     log_event(
         logger,
         "query_classification_completed",

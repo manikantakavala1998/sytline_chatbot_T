@@ -18,6 +18,19 @@ _REFERENCES = re.compile(
 )
 
 
+# Explanation questions can be answered in general when no record is selected; data requests
+# ("show me this record", "what is the balance of this customer") still need the record.
+_EXPLANATION = re.compile(r"^\s*(?:why|how)\b", re.IGNORECASE)
+GENERAL_ANSWER_REASON = "answered_in_general_no_record_selected"
+
+
+def _general_noun(reference: str) -> str:
+    noun = reference.split()[-1].lower()
+    if noun == "one":
+        noun = "record"
+    return f"an {noun}" if noun[0] in "aeiou" else f"a {noun}"
+
+
 def _replace_context_references(query: str, context: RequestContext) -> tuple[str, list[str]]:
     resolved = query
     replacements: list[str] = []
@@ -65,7 +78,18 @@ def resolve_ambiguity(query: str, context: RequestContext) -> AmbiguityResult:
     resolved_query, replacements = _replace_context_references(normalized, context)
     identifiers = re.findall(r"\b[A-Z]{1,6}[-_]?[0-9]{2,}\b", query)
 
-    if _REFERENCES.search(resolved_query):
+    if _REFERENCES.search(resolved_query) and _EXPLANATION.match(resolved_query):
+        # "Why can't I ship this order?" with nothing selected: the common reasons are still
+        # useful, so answer in general ("an order") and point to selecting the record for
+        # specifics — instead of refusing with a clarification question.
+        general = _REFERENCES.sub(lambda m: _general_noun(m.group(0)), resolved_query)
+        result = AmbiguityResult(
+            label=AmbiguityLabel.CLEAR,
+            resolved=True,
+            resolved_query=general,
+            reason=GENERAL_ANSWER_REASON,
+        )
+    elif _REFERENCES.search(resolved_query):
         result = AmbiguityResult(
             label=AmbiguityLabel.REFERENTIAL,
             resolved=False,

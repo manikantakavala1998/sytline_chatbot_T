@@ -25,6 +25,7 @@ from backend.app.models.embeddings import embed, embed_query
 from backend.app.qa.glossary import GlossaryEntry, expand_query, load_glossary
 from backend.app.qa.loader import QARecord, load_qa_records
 from backend.app.utils.logger import get_logger
+from backend.app.utils.search_tokens import search_tokens
 
 logger = get_logger(__name__)
 
@@ -40,7 +41,7 @@ def _normalize(text: str) -> str:
 
 
 def _tokenize(text: str) -> list[str]:
-    return _normalize(text).split()
+    return search_tokens(text)  # stemmed: "shipping" matches "shipment", "invoices" matches "invoice"
 
 
 @dataclass

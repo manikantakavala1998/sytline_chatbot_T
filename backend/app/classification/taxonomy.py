@@ -132,6 +132,11 @@ class QueryTransformResult(BaseModel):
     expanded_subqueries: list[str] = Field(default_factory=list)
     # "good_morning", "hi", ... when the message opened with a greeting before the real question.
     leading_greeting: str | None = None
+    # ... and whether that opener also asked how we are ("good morning, how are you? what is ...").
+    leading_wellbeing: bool = False
+    # Standard-SyteLine-wording version of a single question from the conversation LLM
+    # ("raise a quote" -> "create and issue a quotation"), glossary-expanded, for search.
+    terminology_query: str | None = None
     transformations: list[str] = Field(default_factory=list)
 
 

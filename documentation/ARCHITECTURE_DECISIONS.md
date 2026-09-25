@@ -155,6 +155,23 @@ in a new graph node between the security gate and the scope check.**
   History is owned by the trusted `user_id` — never by the client-supplied session id alone.
 - History is fail-soft: Postgres being down removes memory, never the ability to answer.
 
+### 11. An LLM understands greetings and small talk; rules are only the fallback (2026-09-25)
+**Decision (user's request): a `gpt-4.1-mini` "conversation understanding" step reads every
+message after the security gate and returns the message kind, greeting, "how are you" flag and the
+clean standalone question (follow-ups resolved, translated to English). It replaces both the
+word-list greeting detection as the primary path and the separate follow-up call.**
+
+- Why: word lists can't keep up with real users ("good morning buddy" failed; slang, typos,
+  emoji and other languages are endless). Measured live: 20/20 unseen phrasings in 5 languages
+  handled after the prompt fixes, with no word added anywhere.
+- Guardrails: the model only labels and rewrites — replies stay fixed templates, labels are enum-
+  validated, and the security gate still runs first on the raw text (supersedes decision #8's
+  "no model call for greetings").
+- Cost/latency: one extra small call (≈0.8–1 s) per new message; pure small talk is cached
+  (repeats ≈0.01 s). If the LLM is off or fails, `small_talk.py` rules answer instead.
+- Future: fold this call and the intent classifier into one call to save ≈1 s per business
+  question; Phase 7's SLM can take over the same JSON contract.
+
 ---
 
 ## Still open — `[NEEDS SYTELINE CONFIRMATION]`

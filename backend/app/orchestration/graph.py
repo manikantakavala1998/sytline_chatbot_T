@@ -9,17 +9,18 @@ classification -> code-enforced routing -> route execution.
 from langgraph.graph import END, START, StateGraph
 
 from backend.app.authorization.resolver import resolve_permission
-from backend.app.classification.ambiguity import resolve_ambiguity
-from backend.app.classification.followup import resolve_followup
-from backend.app.classification.query_transformer import transform_query
+from backend.app.classification.ambiguity import GENERAL_ANSWER_REASON, resolve_ambiguity
+from backend.app.classification.conversation import MessageKind, analyze_message
+from backend.app.classification.query_transformer import expand_for_retrieval, transform_query
 from backend.app.classification.router import classify_and_route
 from backend.app.classification.scope import classify_scope
-from backend.app.classification.taxonomy import IntentLabel, RouteLabel
+from backend.app.classification.small_talk import greeting_key_from_label, parse_greeting
+from backend.app.classification.taxonomy import IntentLabel, QueryClassification, RouteLabel
 from backend.app.history.store import Turn
 from backend.app.orchestration.state import ChatWorkflowState, WorkflowResult
 from backend.app.qa.retriever import get_qa_index
 from backend.app.rag.answer_service import generate_answer
-from backend.app.rag.retriever import get_rag_index
+from backend.app.rag.retriever import CONTEXT_CHAR_BUDGET, TOP_K_RERANKED, get_rag_index
 from backend.app.security.input_gate import evaluate_security
 from backend.app.utils.logger import get_logger, log_event
 
@@ -35,7 +36,10 @@ _GREETING_ECHO = {
     "good_morning": "Good morning!",
     "good_afternoon": "Good afternoon!",
     "good_evening": "Good evening!",
+    "good_night": "Good night!",
+    "hello": "Hello!",
 }
+_WELLBEING_REPLY = "I’m doing well, thank you for asking!"
 MULTI_QUESTION_CONTEXT_CHARS = 9000
 
 # Show a curated Excel answer verbatim only when BOTH signals agree:
@@ -49,11 +53,55 @@ EXCEL_VERBATIM_MATCH_SCORE = 0.90
 
 def _greet_back(state: ChatWorkflowState, answer: str | None) -> str | None:
     """Prefix the answer with the greeting the user opened with ("Good morning! ...")."""
+    conversation = state.get("conversation")
     transformed = state.get("transformed")
-    greeting = transformed.leading_greeting if transformed else None
-    if not greeting or not answer:
+    if conversation and (conversation.greeting or conversation.asked_wellbeing):
+        greeting = conversation.greeting.value if conversation.greeting else None
+        # A pure "how are you" already gets a wellbeing template; only add it in front of real answers.
+        asked_wellbeing = conversation.asked_wellbeing and conversation.kind == MessageKind.BUSINESS
+    else:
+        greeting = transformed.leading_greeting if transformed else None
+        asked_wellbeing = bool(transformed and transformed.leading_wellbeing)
+    if not answer:
         return answer
-    return f"{_GREETING_ECHO.get(greeting, 'Hello!')} {answer}"
+    if not greeting:
+        # "hope you're doing well! how do I ..." — no greeting word, but still answer the kindness.
+        return f"{_WELLBEING_REPLY} {answer}" if asked_wellbeing else answer
+    wellbeing = f" {_WELLBEING_REPLY}" if asked_wellbeing else ""
+    return f"{_GREETING_ECHO.get(greeting, 'Hello!')}{wellbeing} {answer}"
+
+
+def _greeting_reply(state: ChatWorkflowState) -> str | None:
+    """Reply to a pure greeting, echoing its time of day and answering "how are you".
+
+    The conversation-understanding LLM decides the greeting; the offline rules and the
+    classifier's label are fallbacks for when it is unavailable."""
+    conversation = state.get("conversation")
+    if conversation and conversation.is_small_talk:
+        if conversation.kind != MessageKind.GREETING:
+            return None
+        key = conversation.greeting.value if conversation.greeting else "hello"
+        return _format_greeting_reply(key, conversation.asked_wellbeing)
+
+    greeting = parse_greeting(state.get("original_query") or state["query"]) or parse_greeting(state["query"])
+    classification = state.get("classification")
+    label = (classification.sub_intent or "") if classification else ""
+    if greeting is None:
+        if not classification or classification.intent != IntentLabel.GREETING:
+            return None
+        key = greeting_key_from_label(label) or "hello"
+        wellbeing = any(word in label.lower() for word in ("wellbeing", "how_are", "how are"))
+    else:
+        key, wellbeing = greeting.key, greeting.wellbeing
+    return _format_greeting_reply(key, wellbeing)
+
+
+def _format_greeting_reply(key: str, wellbeing: bool) -> str:
+    echo = _GREETING_ECHO.get(key, "Hello!")
+    if key == "good_night":
+        return f"{echo} I’ll be here whenever you need help with SyteLine."
+    follow = "How can I help with your SyteLine Prospect-to-Cash work" + (" today?" if key != "hello" else "?")
+    return f"{echo} {_WELLBEING_REPLY + ' ' if wellbeing else ''}{follow}"
 
 
 _CHITCHAT_KEYWORDS = (
@@ -81,6 +129,19 @@ def _normalize_chitchat_sub_intent(sub_intent: str | None) -> str | None:
     return lowered
 
 
+def _best_qa_match(transformed):
+    """Match the curated Excel questions with the user's own words AND the standard-terminology
+    version, keeping the better one. The user's words must stay in play: an exact match on a
+    question/variation ("What is an estimate?") is lost if only the LLM's rewording is used."""
+    index = get_qa_index()
+    match = index.search(transformed.expanded_query)
+    if transformed.terminology_query and match.score < 1.0:
+        alternative = index.search(transformed.terminology_query)
+        if alternative.score > match.score:
+            match = alternative
+    return match
+
+
 def _search_each_question(state: ChatWorkflowState):
     """Search every sub-question separately and interleave the evidence.
 
@@ -89,26 +150,55 @@ def _search_each_question(state: ChatWorkflowState):
     Returns (chunks, scores, source types, per-sub-question results).
     """
     transformed = state["transformed"]
-    queries = transformed.expanded_subqueries or [transformed.expanded_query]
+    # Multi-query retrieval: a single question is searched with BOTH the user's own words and the
+    # LLM's standard-terminology version, and the results are merged. Either one alone misses
+    # cases — "raise the quotation" needs the terminology; "change customer payment terms" was
+    # steered to the payment module by the rewrite while the answer is in the customer module.
+    if transformed.expanded_subqueries:
+        queries = transformed.expanded_subqueries
+    elif transformed.terminology_query and transformed.terminology_query != transformed.expanded_query:
+        queries = [transformed.terminology_query, transformed.expanded_query]
+    else:
+        queries = [transformed.expanded_query]
     index = get_rag_index()
     per_query = [index.search(query) for query in queries]
 
-    chunks, scores, sources, seen, running_chars = [], [], [], set(), 0
-    depth = max((len(result.chunks) for result in per_query), default=0)
-    for rank in range(depth):
+    if transformed.expanded_subqueries:
+        # Different sub-questions: interleave so every part gets evidence.
+        candidates = []
+        depth = max((len(result.chunks) for result in per_query), default=0)
+        for rank in range(depth):
+            for result in per_query:
+                if rank < len(result.chunks):
+                    candidates.append((result.chunks[rank], result.scores[rank]))
+        budget = MULTI_QUESTION_CONTEXT_CHARS
+    else:
+        # One question searched two ways. Each wording keeps its top 2 (so the shipment section
+        # found only by "ship a customer order (shipment)" isn't pushed out by six generic
+        # "customer order" sections from the user's wording), then the rest by score.
+        best: dict[str, tuple] = {}
         for result in per_query:
-            if rank >= len(result.chunks):
-                continue
-            chunk, score = result.chunks[rank], result.scores[rank]
-            if chunk.chunk_id in seen:
-                continue
-            if chunks and running_chars + len(chunk.text) > MULTI_QUESTION_CONTEXT_CHARS:
-                continue
-            seen.add(chunk.chunk_id)
-            chunks.append(chunk)
-            scores.append(score)
-            sources.append(index.source_type(chunk.chunk_id))
-            running_chars += len(chunk.text)
+            for chunk, score in zip(result.chunks, result.scores):
+                if chunk.chunk_id not in best or score > best[chunk.chunk_id][1]:
+                    best[chunk.chunk_id] = (chunk, score)
+        guaranteed = [cid for result in per_query for cid in (c.chunk_id for c in result.chunks[:2])]
+        ordered = sorted(best.values(), key=lambda pair: pair[1], reverse=True)
+        picked = list(dict.fromkeys(guaranteed))
+        picked += [c.chunk_id for c, _ in ordered if c.chunk_id not in picked]
+        candidates = sorted((best[cid] for cid in picked[:TOP_K_RERANKED]), key=lambda pair: pair[1], reverse=True)
+        budget = CONTEXT_CHAR_BUDGET
+
+    chunks, scores, sources, seen, running_chars = [], [], [], set(), 0
+    for chunk, score in candidates:
+        if chunk.chunk_id in seen:
+            continue
+        if chunks and running_chars + len(chunk.text) > budget:
+            continue
+        seen.add(chunk.chunk_id)
+        chunks.append(chunk)
+        scores.append(score)
+        sources.append(index.source_type(chunk.chunk_id))
+        running_chars += len(chunk.text)
     return chunks, scores, sources, per_query
 
 
@@ -119,6 +209,7 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
     transformed = state.get("transformed")
     classification = state.get("classification")
     selected_route = state.get("selected_route")
+    conversation = state.get("conversation")
     return {
         "security": security.label.value if security else None,
         "scope": scope.label.value if scope else None,
@@ -132,6 +223,8 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
         "transformations": transformed.transformations if transformed else [],
         "history_turns_used": len(state.get("history") or []),
         "followup_resolved": bool(state.get("followup_resolved")),
+        "message_kind": conversation.kind.value if conversation else None,
+        "conversation_source": conversation.source if conversation else None,
     }
 
 
@@ -140,7 +233,7 @@ class ChatOrchestrator:
         builder = StateGraph(ChatWorkflowState)
         builder.add_node("security_gate", self._security_node)
         builder.add_node("blocked_response", self._blocked_response_node)
-        builder.add_node("followup_resolution", self._followup_node)
+        builder.add_node("conversation_understanding", self._conversation_node)
         builder.add_node("scope_check", self._scope_node)
         builder.add_node("out_of_scope_response", self._out_of_scope_node)
         builder.add_node("ambiguity_resolution", self._ambiguity_node)
@@ -157,10 +250,14 @@ class ChatOrchestrator:
         builder.add_conditional_edges(
             "security_gate",
             self._after_security,
-            {"blocked": "blocked_response", "safe": "followup_resolution"},
+            {"blocked": "blocked_response", "safe": "conversation_understanding"},
         )
         builder.add_edge("blocked_response", END)
-        builder.add_edge("followup_resolution", "scope_check")
+        builder.add_conditional_edges(
+            "conversation_understanding",
+            self._after_conversation,
+            {"small_talk": "direct_response", "business": "scope_check"},
+        )
         builder.add_conditional_edges(
             "scope_check",
             self._after_scope,
@@ -219,11 +316,28 @@ class ChatOrchestrator:
         return {"result": result}
 
     @staticmethod
-    def _followup_node(state: ChatWorkflowState) -> dict:
-        # Security already checked the raw message; the rewrite only substitutes
-        # references with topics from earlier turns that passed the same gate.
-        standalone, rewritten = resolve_followup(state["query"], state.get("history") or [], state["request_id"])
-        return {"query": standalone, "followup_resolved": rewritten}
+    def _conversation_node(state: ChatWorkflowState) -> dict:
+        # Security already checked the raw message; the LLM here only labels it and
+        # rewrites references with topics from earlier turns that passed the same gate.
+        analysis = analyze_message(state["query"], state.get("history") or [], state["request_id"])
+        update: dict = {"conversation": analysis, "followup_resolved": analysis.followup_resolved}
+        if analysis.is_small_talk:
+            # Pure small talk needs no scope check, search or paid classifier call.
+            update["classification"] = QueryClassification(
+                intent=IntentLabel.GREETING if analysis.kind == MessageKind.GREETING else IntentLabel.CHITCHAT,
+                sub_intent=analysis.kind.value,
+                route=RouteLabel.DIRECT_RESPONSE,
+                confidence=0.95,
+                reasoning_summary=f"conversation_analysis:{analysis.source}",
+            )
+            update["selected_route"] = RouteLabel.DIRECT_RESPONSE
+        elif analysis.question:
+            update["query"] = analysis.question
+        return update
+
+    @staticmethod
+    def _after_conversation(state: ChatWorkflowState) -> str:
+        return "small_talk" if state["conversation"].is_small_talk else "business"
 
     @staticmethod
     def _scope_node(state: ChatWorkflowState) -> dict:
@@ -282,7 +396,21 @@ class ChatOrchestrator:
     @staticmethod
     def _transform_node(state: ChatWorkflowState) -> dict:
         query = state["ambiguity"].resolved_query or state["query"]
-        return {"transformed": transform_query(query, state["context"])}
+        transformed = transform_query(query, state["context"])
+        # Search with the LLM's standard-terminology version ("raise a quote" -> "create and issue a
+        # quotation") — the manuals never say "raise", so the user's slang scored below the evidence
+        # bar. Only for a single question whose text wasn't changed by screen-context substitution;
+        # the answer is still written for the user's own wording (rewritten_query).
+        conversation = state.get("conversation")
+        if (
+            conversation
+            and conversation.search_query
+            and not transformed.subqueries
+            and query == state["query"]
+        ):
+            transformed.terminology_query = expand_for_retrieval(conversation.search_query)
+            transformed.transformations.append("llm_search_terminology")
+        return {"transformed": transformed}
 
     @staticmethod
     def _classification_node(state: ChatWorkflowState) -> dict:
@@ -321,15 +449,9 @@ class ChatOrchestrator:
         sub_intent = _normalize_chitchat_sub_intent(state["classification"].sub_intent)
         # Time-of-day greetings get an answer that actually echoes the greeting back,
         # instead of every "hi"/"good morning"/"good evening" collapsing to one reply.
-        greeting_answers = {
-            "good_morning": "Good morning! How can I help with your SyteLine Prospect-to-Cash work today?",
-            "good_afternoon": "Good afternoon! How can I help with your SyteLine Prospect-to-Cash work today?",
-            "good_evening": "Good evening! How can I help with your SyteLine Prospect-to-Cash work today?",
-        }
+        greeting_answer = _greeting_reply(state)
         answers = {
-            IntentLabel.GREETING: greeting_answers.get(
-                sub_intent or "", "Hello! How can I help with your SyteLine Prospect-to-Cash work?"
-            ),
+            IntentLabel.GREETING: greeting_answer or "Hello! How can I help with your SyteLine Prospect-to-Cash work?",
             IntentLabel.FEEDBACK: "Thank you for the feedback. It has been noted for the improvement workflow.",
             IntentLabel.COMPLAINT: "I understand this is frustrating. Tell me the SyteLine screen or process involved, and I’ll help narrow it down.",
         }
@@ -352,7 +474,8 @@ class ChatOrchestrator:
         result = WorkflowResult(
             route="DIRECT_RESPONSE",
             answer=(
-                _greet_back(
+                greeting_answer  # a greeting the classifier happened to label CHITCHAT is still a greeting
+                or _greet_back(
                     state,
                     chitchat_answers.get(
                         sub_intent,
@@ -380,7 +503,7 @@ class ChatOrchestrator:
             return {"result": result}
 
         log_event(logger, "fast_qa_search_started", request_id=state["request_id"])
-        match = get_qa_index().search(state["transformed"].expanded_query)
+        match = _best_qa_match(state["transformed"])
         log_event(
             logger,
             "fast_qa_search_completed",
@@ -436,7 +559,7 @@ class ChatOrchestrator:
         if qa_candidate is None and not transformed.subqueries:
             # Routes that skip the Fast Q&A node (e.g. troubleshooting) still get the question match.
             if resolve_permission(state["user"], "READ", "qa", request_id=state["request_id"]).allowed:
-                match = get_qa_index().search(transformed.expanded_query)
+                match = _best_qa_match(transformed)
                 if match.candidates:
                     qa_candidate = (match.candidates[0][0].qa_id, float(match.candidates[0][1]))
 
@@ -471,7 +594,7 @@ class ChatOrchestrator:
             markdown_chunks=sources.count("markdown"),
             best_excel=round(best_by_source.get("excel", float("nan")), 2),
             best_markdown=round(best_by_source.get("markdown", float("nan")), 2),
-            subquestions=len(per_query),
+            searches=len(per_query),
             subquestions_with_evidence=sum(1 for r in per_query if r.has_evidence),
         )
         confidence_trace = {
@@ -482,7 +605,7 @@ class ChatOrchestrator:
         # Single question whose top-ranked evidence (of 10 Excel + 10 Markdown) is the same curated
         # row the question itself strongly matched -> show the approved Excel answer verbatim.
         if (
-            len(per_query) == 1
+            not transformed.subqueries
             and chunks
             and sources[0] == "excel"
             and qa_candidate
@@ -601,6 +724,17 @@ class ChatOrchestrator:
             raise RuntimeError("Orchestration completed without a result")
         if state.get("followup_resolved"):
             result.resolved_query = state["query"]
+        ambiguity = state.get("ambiguity")
+        if (
+            ambiguity
+            and ambiguity.reason == GENERAL_ANSWER_REASON
+            and result.answer
+            and result.route in ("FAST_QA_RESPONSE", "MARKDOWN_RAG_RESPONSE")
+        ):
+            result.answer += (
+                "\n\nThis is the general answer. To check a specific record, select it in SyteLine "
+                "(or type its number) and ask again."
+            )
         log_event(
             logger,
             "orchestration_completed",

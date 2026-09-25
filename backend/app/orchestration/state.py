@@ -12,6 +12,7 @@ from backend.app.classification.taxonomy import (
     ScopeResult,
     SecurityResult,
 )
+from backend.app.classification.conversation import ConversationAnalysis
 from backend.app.context.manager import RequestContext
 from backend.app.history.store import Turn
 from backend.app.integrations.syteline.session_context import SyteLineUser
@@ -37,6 +38,8 @@ class ChatWorkflowState(TypedDict, total=False):
     original_query: str
     history: list[Turn]
     followup_resolved: bool
+    # LLM reading of the message: small-talk kind, greeting, "how are you", clean question.
+    conversation: ConversationAnalysis
     context: RequestContext
     user: SyteLineUser
     security: SecurityResult
