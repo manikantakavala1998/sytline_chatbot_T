@@ -11,11 +11,23 @@ import uuid
 
 from fastapi import APIRouter, HTTPException, Path, Request
 
-from backend.app.api.models import SESSION_ID_PATTERN, ChatRequest, ChatResponse, RatingRequest
+from backend.app.api.models import (
+    SESSION_ID_PATTERN,
+    ChatRequest,
+    ChatResponse,
+    EscalationInfo,
+    RatingRequest,
+    TicketRequest,
+)
 from backend.app.authorization.resolver import resolve_permission
+from backend.app.classification.taxonomy import SecurityLabel
 from backend.app.config import settings
 from backend.app.context.manager import RecordContext, UIContext, build_request_context
+from backend.app.escalation import store as escalation_store
+from backend.app.escalation.notifier import notify_safely
+from backend.app.escalation.policy import EscalationState
 from backend.app.history import store as history_store
+from backend.app.quality.answer_validator import LEAK_REASONS
 from backend.app.integrations.syteline.session_context import get_configuration, get_current_site
 from backend.app.orchestration.graph import get_chat_orchestrator
 from backend.app.security.bootstrap import InvalidSessionError, bootstrap_security
@@ -122,6 +134,8 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         route=workflow_result.route,
         source_count=len(workflow_result.sources or []),
     )
+    _record_security_event(request, user.user_id, request_id, context, workflow_result)
+    escalation = _apply_escalation_offer(request, user, request_id, workflow_result)
     message_id = _save_exchange(request, user.user_id, request_id, workflow_result)
     return ChatResponse(
         route=workflow_result.route,
@@ -135,7 +149,132 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         message_id=message_id,
         resolved_query=workflow_result.resolved_query,
         grounding=workflow_result.grounding,
+        escalation=escalation,
     )
+
+
+# ── Escalation (Phase 5 step 3) ────────────────────────────────────────
+# Support tickets (§55) and security events (§56) are separate flows. Both are fail-soft: if
+# Postgres is down the chat still answers; the ticket offer then points to the support team.
+
+TICKET_OFFER = (
+    "If this doesn’t solve it, I can raise a support ticket with this conversation attached — "
+    "press 🎫 Create support ticket below."
+)
+NO_TICKET_OFFER = (
+    "If this doesn’t fix it, contact your SyteLine support team and tell them what you’ve already tried."
+)
+TICKETS_UNAVAILABLE = (
+    "I can’t create support tickets right now. Please contact your SyteLine support team directly and "
+    "tell them what you’ve already tried."
+)
+
+
+def _record_security_event(request: ChatRequest, user_id: str, request_id: str, context, result) -> None:
+    """Every blocked attack and every blocked answer leak is stored; repeated attempts alert."""
+    security_label = (result.decision_trace or {}).get("security")
+    # A BLOCKED with a SAFE security label is a missing permission, not an attack.
+    if result.route == "BLOCKED" and security_label and security_label != SecurityLabel.SAFE.value:
+        event_type, label = "input_blocked", security_label
+    elif result.grounding == "replaced" and result.reason in LEAK_REASONS:
+        event_type, label = "response_leak", escalation_store.RESPONSE_LEAK_LABEL
+    else:
+        return
+    if not escalation_store.is_available():
+        log_event(logger, "security_event_not_stored", request_id=request_id, label=label, reason="store_down")
+        return
+    try:
+        event = escalation_store.record_security_event(
+            user_id=user_id, session_id=request.session_id, request_id=request_id, event_type=event_type,
+            label=label, query=request.query, site=context.site, module=context.ui.module, form=context.ui.form,
+        )
+    except Exception:
+        logger.exception("event=security_event_store_failed request_id=%s", request_id)
+        return
+    if event["alert_raised"]:
+        notify_safely("security_alert", event)
+
+
+def _apply_escalation_offer(request: ChatRequest, user, request_id: str, result) -> EscalationInfo:
+    state = result.escalation
+    trigger = (result.decision_trace or {}).get("escalation_trigger")
+    if state == EscalationState.NONE.value:
+        return EscalationInfo(state=state)
+    available = (
+        bool(request.session_id)
+        and escalation_store.is_available()
+        and resolve_permission(user, "INSERT", "support_ticket", request_id=request_id).allowed
+    )
+    if state == EscalationState.CREATE_AFTER_CONFIRMATION.value and not available:
+        result.answer = TICKETS_UNAVAILABLE
+    elif state == EscalationState.SUGGEST_TICKET.value and result.answer:
+        result.answer = f"{result.answer}\n\n{TICKET_OFFER if available else NO_TICKET_OFFER}"
+    log_event(logger, "escalation_offered", request_id=request_id, state=state, trigger=trigger or "none",
+              ticket_available=available)
+    return EscalationInfo(state=state, trigger=trigger, ticket_available=available)
+
+
+def _ticket_user(simulated_group: str | None, session_token: str | None, request_id: str, resource: str,
+                 operation: str):
+    if not escalation_store.is_available():
+        raise HTTPException(status_code=503, detail="Support tickets are not available (Postgres is down)")
+    try:
+        user = bootstrap_security(session_token or "mock-session", simulated_group=simulated_group)
+    except InvalidSessionError:
+        raise HTTPException(status_code=401, detail="invalid_session")
+    if not resolve_permission(user, operation, resource, request_id=request_id).allowed:
+        raise HTTPException(status_code=403, detail="not_permitted")
+    return user
+
+
+@router.post("/api/tickets")
+def create_support_ticket(body: TicketRequest, http_request: Request):
+    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
+    user = _ticket_user(body.simulated_group, body.session_token, request_id, "support_ticket", "INSERT")
+    ctx = body.context
+    ticket_ctx = escalation_store.TicketContext(
+        user_id=user.user_id,
+        user_display_name=user.display_name,
+        site=(ctx.site if ctx else None) or get_current_site(),
+        module=ctx.module if ctx else None,
+        form=ctx.form if ctx else None,
+        record_type=ctx.record_type if ctx else None,
+        record_id=ctx.record_id if ctx else None,
+    )
+    outcome = escalation_store.create_ticket(
+        ctx=ticket_ctx, session_id=body.session_id, message_id=body.message_id, user_note=body.note,
+        request_id=request_id,
+    )
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="conversation_not_found")
+    ticket, created = outcome
+    if created:
+        notify_safely("ticket_created", ticket)
+    return {"ticket_ref": ticket["ticket_ref"], "status": ticket["status"], "priority": ticket["priority"],
+            "created": created}
+
+
+@router.get("/api/tickets")
+def list_my_tickets(http_request: Request, simulated_group: str | None = None, session_token: str | None = None):
+    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
+    user = _ticket_user(simulated_group, session_token, request_id, "support_ticket", "INSERT")
+    return {"tickets": escalation_store.list_user_tickets(user.user_id)}
+
+
+@router.get("/api/admin/tickets")
+def list_all_tickets(http_request: Request, simulated_group: str | None = None, session_token: str | None = None):
+    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
+    _ticket_user(simulated_group, session_token, request_id, "admin_console", "READ")
+    return {"tickets": escalation_store.list_all_tickets()}
+
+
+@router.get("/api/admin/security-events")
+def list_security_events(
+    http_request: Request, simulated_group: str | None = None, session_token: str | None = None
+):
+    request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
+    _ticket_user(simulated_group, session_token, request_id, "admin_console", "READ")
+    return {"events": escalation_store.list_security_events()}
 
 
 # ── Conversation history (PostgreSQL) ──────────────────────────────────

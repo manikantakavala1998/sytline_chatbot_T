@@ -71,6 +71,7 @@ class Turn:
 
     question: str
     answer: str
+    route: str | None = None  # how it ended (NO_ANSWER, CLARIFY...) — escalation counts failed attempts
 
 
 def _conninfo() -> str:
@@ -116,6 +117,15 @@ def _require_pool() -> ConnectionPool:
     return _pool
 
 
+def shared_pool() -> ConnectionPool:
+    """The same Postgres pool, for the escalation store (tickets, security events)."""
+    return _require_pool()
+
+
+def owns_session(conn, session_id: str, user_id: str) -> bool:
+    return _owns(conn, session_id, user_id)
+
+
 def _owns(conn, session_id: str, user_id: str) -> bool:
     row = conn.execute("SELECT user_id FROM chat_sessions WHERE session_id = %s", (session_id,)).fetchone()
     return row is not None and row[0] == user_id
@@ -143,7 +153,7 @@ def recent_turns(session_id: str, user_id: str, limit: int) -> list[Turn]:
         elif pending_answer is not None:
             answer, route = pending_answer
             if route not in ("BLOCKED", "ERROR"):
-                turns.append(Turn(question=content, answer=answer))
+                turns.append(Turn(question=content, answer=answer, route=route))
             pending_answer = None
         if len(turns) >= limit:
             break

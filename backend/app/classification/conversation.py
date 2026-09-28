@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from backend.app.classification.small_talk import chitchat_kind, clean, parse_greeting, strip_leading_greeting
 from backend.app.classification.taxonomy import EmotionLabel
 from backend.app.config import settings
+from backend.app.escalation.policy import is_ticket_request
 from backend.app.history.store import Turn
 from backend.app.utils.logger import get_logger, log_event
 
@@ -53,6 +54,8 @@ class MessageKind(str, Enum):
     ACKNOWLEDGEMENT = "acknowledgement"
     INTRODUCTION = "introduction"
     CASUAL_CHECKIN = "casual_checkin"
+    # "raise a ticket", "let me talk to a person" — a request to the ASSISTANT to escalate.
+    ESCALATION_REQUEST = "escalation_request"
     BUSINESS = "business"
 
 
@@ -136,6 +139,10 @@ Rules:
   English. null when the message has no business request at all.
 - Questions about the assistant itself are small talk, not business: who are you / who made you /
   are you a bot / your name -> identity; what can you do / how can you help -> capabilities.
+- The user asking the ASSISTANT to escalate — "raise a ticket", "create a support ticket for this",
+  "I want to talk to a human / someone from support", "escalate this" — is kind
+  escalation_request with question null. Asking HOW to do something in SyteLine ("how do I raise
+  a quotation", "how to log a case in SyteLine") is business, not an escalation request.
 - "how are you", "how's your day", "how's it going", "hope you're well" -> wellbeing_phrase set
   (kind wellbeing if nothing else); only "what's up" / "what's cooking" style -> casual_checkin.
 - "search_query": the same request re-worded in standard SyteLine / ERP documentation terms, for
@@ -184,6 +191,8 @@ def _conversation_text(history: list[Turn]) -> str:
 
 def _rules_analysis(query: str) -> ConversationAnalysis:
     """Offline fallback (small_talk.py) — used only when the LLM is unavailable."""
+    if is_ticket_request(query):
+        return ConversationAnalysis(kind=MessageKind.ESCALATION_REQUEST, source="rules")
     greeting = parse_greeting(query)
     if greeting:
         return ConversationAnalysis(kind=MessageKind.GREETING, greeting=greeting.key,

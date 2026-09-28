@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # containers — pymilvus's MilvusClient supports both via one URI.
     milvus_uri: str = "http://localhost:19531"
 
+    # Phase 5 escalation. Tickets and security events are stored in Postgres; the notifier sends
+    # them on ("log" = write an event to the log only — email/Teams plug in here later).
+    escalation_notifier: str = "log"
+    # Security alert when one user is blocked this many times inside the window.
+    security_alert_threshold: int = 3
+    security_alert_window_minutes: int = 15
+
     # Conversation history — ptc-postgres from docker-compose.yml, on 5433 so it
     # never collides with a Postgres already installed on this machine. The
     # defaults match the compose file's local-dev container only; set real

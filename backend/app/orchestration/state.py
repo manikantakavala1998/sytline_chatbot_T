@@ -29,6 +29,8 @@ class WorkflowResult(BaseModel):
     # Answer validation outcome for generated answers: passed | repaired | replaced |
     # not_found | unverified. "approved" for curated Excel answers; None for templates.
     grounding: str | None = None
+    # Support-ticket state (§55): ESC_NONE | ESC_SUGGEST_TICKET | ESC_CREATE_TICKET_AFTER_CONFIRMATION.
+    escalation: str = "ESC_NONE"
     decision_trace: dict[str, object] = Field(default_factory=dict)
 
 

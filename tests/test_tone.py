@@ -96,16 +96,14 @@ def test_normal_mood_changes_nothing():
 def test_approved_text_keeps_every_word_and_gets_an_opener():
     toned = tone.apply_tone(APPROVED_TEXT, F1, tone.APPROVED)
     assert toned.startswith("No problem")
-    assert APPROVED_TEXT in toned
-    assert tone.SUPPORT_OFFER not in toned  # confusion is not a reason to escalate
+    assert toned.endswith(APPROVED_TEXT)
 
 
-@pytest.mark.parametrize("mood", [F3, F4])
-def test_frustration_adds_the_support_offer(mood):
-    for kind in (tone.APPROVED, tone.GENERATED, tone.NOT_FOUND):
-        toned = tone.apply_tone(APPROVED_TEXT, mood, kind)
-        assert toned.endswith(tone.SUPPORT_OFFER)
-        assert APPROVED_TEXT in toned
+@pytest.mark.parametrize("mood", [F2, F3, F4])
+def test_approved_text_is_never_rewritten(mood):
+    toned = tone.apply_tone(APPROVED_TEXT, mood, tone.APPROVED)
+    assert toned.endswith(APPROVED_TEXT)
+    assert toned.count(APPROVED_TEXT) == 1
 
 
 def test_generated_and_not_found_get_no_opener():
@@ -117,10 +115,6 @@ def test_every_non_normal_mood_has_an_instruction():
     assert tone.tone_instruction(F0) is None
     for mood in (F1, F2, F3, F4):
         assert tone.tone_instruction(mood)
-
-
-def test_escalation_only_for_frustrated_and_persistent():
-    assert [m for m in EmotionLabel if tone.suggests_escalation(m)] == [F3, F4]
 
 
 # ── Where the mood comes from ──────────────────────────────────────────
@@ -194,15 +188,15 @@ def test_frustration_never_weakens_security():
 def test_frustrated_live_data_request_is_still_not_answered():
     result = ChatOrchestrator().run("show customer CUST100 balance NOW, this is useless!!", make_context(), make_user())
     assert result.route == "CAPABILITY_PENDING"
-    assert tone.SUPPORT_OFFER not in (result.answer or "")
     assert result.decision_trace["emotion"] == F3.value
-    assert result.decision_trace["escalation"] == "suggest_ticket"
+    assert result.decision_trace["escalation"] == "ESC_SUGGEST_TICKET"
+    assert result.decision_trace["escalation_trigger"] == "frustration"
 
 
 def test_trace_marks_normal_questions_as_no_escalation():
     result = ChatOrchestrator().run("Show customer CUST100 balance", make_context(), make_user())
     assert result.decision_trace["emotion"] == F0.value
-    assert result.decision_trace["escalation"] == "none"
+    assert result.decision_trace["escalation"] == "ESC_NONE"
 
 
 def test_graph_uses_the_shared_tone_module():

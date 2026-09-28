@@ -198,7 +198,22 @@ offline fallback. The strongest reading wins.**
 - Mood changes the answer's tone, explanation style and the support offer (F3/F4). It never
   changes facts (the validator still runs after), security, permissions, or any refusal template.
 - SME-approved Excel answers are never rewritten for tone; they only get a short opener.
-- F3/F4 set `escalation: suggest_ticket` in the trace — the hook for step 3's support tickets.
+- F3/F4 lead to a ticket offer through decision #14's escalation policy.
+
+### 14. Support tickets need the user's confirmation; security events are a separate flow (2026-09-25)
+**Decision (Phase 5 step 3): the bot offers a ticket (frustration, a persistent problem, two
+unresolved answers, or the user asking for a human) but creates one only when the user presses
+Confirm. Blocked attacks and blocked answer leaks go to `security_events`, never to tickets.
+Storage is Postgres only for now; notifications go through a pluggable notifier (log today).**
+
+- Why confirmation: master prompt §55 — no automatic tickets unless a business policy says so.
+- Why build the ticket server-side from stored messages: the browser can't inject text into a
+  ticket that the chatbot never saw; blocked turns and secrets are kept out.
+- Why a separate security flow (§56): an attacker should not be able to file support tickets with
+  their attack text, and security staff need severity, counts and alerts — not a support queue.
+- Alert once per burst (3 blocks in 15 minutes by one user), so a scripted attack doesn't send
+  hundreds of alerts. A missing permission is not an attack and is not recorded as one.
+- Email / Teams: not built yet (no connection details). The notifier interface is where they go.
 
 ---
 

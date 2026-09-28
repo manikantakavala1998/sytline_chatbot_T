@@ -29,6 +29,15 @@ class ChatRequest(BaseModel):
     context: ChatContext | None = None
 
 
+class EscalationInfo(BaseModel):
+    """Support-ticket offer for this answer (§55). The ticket is created only when the user
+    confirms via POST /api/tickets."""
+
+    state: str = "ESC_NONE"  # ESC_NONE | ESC_SUGGEST_TICKET | ESC_CREATE_TICKET_AFTER_CONFIRMATION
+    trigger: str | None = None  # frustration | persistent | unresolved | user_request
+    ticket_available: bool = False  # False when Postgres is down, no session, or no permission
+
+
 class ChatResponse(BaseModel):
     # Includes terminal orchestration outcomes (BLOCKED, OUT_OF_SCOPE,
     # CLARIFY, DIRECT_RESPONSE, CAPABILITY_PENDING) plus Q&A/RAG outcomes.
@@ -43,6 +52,19 @@ class ChatResponse(BaseModel):
     message_id: int | None = None  # the stored answer's id in Postgres (used for 👍/👎 ratings)
     resolved_query: str | None = None  # how a follow-up was understood, e.g. "it" -> "a quotation"
     grounding: str | None = None  # answer check: approved | passed | repaired | replaced | not_found | unverified
+    escalation: EscalationInfo | None = None
+
+
+class TicketRequest(BaseModel):
+    """The user confirmed "🎫 Create support ticket". The ticket text is built from the stored
+    conversation, never from free text sent here — only the optional note is the user's own."""
+
+    session_id: str = Field(pattern=SESSION_ID_PATTERN)
+    message_id: int | None = None  # the answer the ticket was raised from
+    note: str | None = Field(default=None, max_length=1000)
+    session_token: str | None = None
+    simulated_group: str | None = None
+    context: ChatContext | None = None
 
 
 class RatingRequest(BaseModel):

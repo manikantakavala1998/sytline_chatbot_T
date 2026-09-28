@@ -4,11 +4,11 @@ Mood levels (master prompt "Frustration / Emotion Classes"):
   F0 NORMAL      plain, concise answer
   F1 CONFUSED    simpler words, short numbered steps, offer to explain more
   F2 COMPLAINT   one short acknowledgement, then the solution
-  F3 FRUSTRATED  calm, one empathy sentence, most likely fix first, offer support
+  F3 FRUSTRATED  calm, one empathy sentence, most likely fix first (+ ticket offer)
   F4 PERSISTENT  acknowledge it's still unresolved, don't repeat the same generic steps,
-                 give the next diagnostic step, offer support
+                 give the next diagnostic step (+ ticket offer)
 
-Mood may change TONE, explanation style and the escalation offer only. It never changes
+Mood may change TONE, explanation style and (via escalation/policy.py) the ticket offer only. It never changes
 facts (the answer validator still checks every claim), security, or permissions: blocked,
 out-of-scope and clarification templates are not touched.
 
@@ -31,7 +31,6 @@ SEVERITY = {
     EmotionLabel.FRUSTRATED: 3,
     EmotionLabel.PERSISTENT: 4,
 }
-ESCALATION_MOODS = {EmotionLabel.FRUSTRATED, EmotionLabel.PERSISTENT}
 REPEAT_SIMILARITY = 0.75
 
 
@@ -145,18 +144,12 @@ _PREFIX = {
     EmotionLabel.FRUSTRATED: "I’m sorry this is getting in your way — here’s what to do.",
     EmotionLabel.PERSISTENT: "Sorry this still isn’t sorted — let’s look at it again.",
 }
-SUPPORT_OFFER = (
-    "If this doesn’t fix it, contact your SyteLine support team and tell them what you’ve already "
-    "tried — they can look at your records directly."
-)
+# The support / ticket offer for F3/F4 is added by the API from the escalation decision
+# (escalation/policy.py), because only the API knows whether a ticket can be stored right now.
 
 
 def tone_instruction(mood: EmotionLabel) -> str | None:
     return _INSTRUCTIONS.get(mood)
-
-
-def suggests_escalation(mood: EmotionLabel) -> bool:
-    return mood in ESCALATION_MOODS
 
 
 GENERATED = "generated"  # the answer model already wrote it in the right tone
@@ -169,12 +162,10 @@ def apply_tone(answer: str | None, mood: EmotionLabel, kind: str) -> str | None:
 
     APPROVED text gets a short opener in front and is otherwise left exactly as approved.
     GENERATED and NOT_FOUND text get no opener ("here's what to do" in front of "I couldn't
-    find that" reads wrong). F3/F4 always get the support offer at the end.
+    find that" reads wrong).
     """
     if not answer or mood == EmotionLabel.NORMAL:
         return answer
     if kind == APPROVED and mood in _PREFIX:
         answer = f"{_PREFIX[mood]}\n\n{answer}"
-    if suggests_escalation(mood):
-        answer = f"{answer}\n\n{SUPPORT_OFFER}"
     return answer

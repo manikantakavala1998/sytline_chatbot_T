@@ -967,6 +967,69 @@ select {
   font-size: 12px;
 }
 
+/* Phase 5 step 3 — support ticket offer under an answer */
+.ticket-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 8px;
+}
+
+.ticket-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ticket-button {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.ticket-button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ticket-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.ticket-note {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-sm);
+  background: var(--surface-bright);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+
+.ticket-status {
+  color: var(--text-faint);
+  font-size: 12px;
+}
+
+.ticket-status.success {
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--success-bg);
+  color: var(--text);
+}
+
 .status-bubble {
   display: flex;
   align-items: center;

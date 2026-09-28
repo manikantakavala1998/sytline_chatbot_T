@@ -28,9 +28,13 @@ logger = get_logger(__name__)
 # group -> set of (operation, resource) pairs it's allowed to perform.
 # "NO_ACCESS" is deliberately empty, so the Context Simulator can
 # demonstrate a real DENY, not just always-allow like the Phase 1 seam.
+_CHAT = {("READ", "assistant"), ("READ", "qa"), ("READ", "markdown_rag")}
+# ("INSERT", "support_ticket"): may raise a support ticket (Phase 5 step 3).
+# ("READ", "admin_console"): may see every ticket and the security events — support/security staff.
 MOCK_GROUP_PERMISSIONS: dict[str, set[tuple[str, str]]] = {
-    "SALES_REP": {("READ", "assistant"), ("READ", "qa"), ("READ", "markdown_rag")},
-    "AR_CLERK": {("READ", "assistant"), ("READ", "qa"), ("READ", "markdown_rag")},
+    "SALES_REP": _CHAT | {("INSERT", "support_ticket")},
+    "AR_CLERK": _CHAT | {("INSERT", "support_ticket")},
+    "SUPPORT_ADMIN": _CHAT | {("INSERT", "support_ticket"), ("READ", "admin_console")},
     "NO_ACCESS": set(),
 }
 

@@ -23,7 +23,7 @@ ignore that entirely and read the actual logged-in user instead.
 
 from dataclasses import dataclass
 
-MOCK_GROUPS = ["SALES_REP", "AR_CLERK", "NO_ACCESS"]
+MOCK_GROUPS = ["SALES_REP", "AR_CLERK", "SUPPORT_ADMIN", "NO_ACCESS"]
 DEFAULT_MOCK_GROUP = "SALES_REP"
 
 

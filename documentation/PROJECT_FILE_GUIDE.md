@@ -346,10 +346,10 @@ The strongest reading wins and is stored as `emotion` in the decision trace.
 
 **How it is applied**: generated answers get a style instruction added to the answer prompt (after
 the grounding rules; the validator still checks every claim). SME-approved Excel answers are never
-rewritten — they get a short opener in front ("No problem — here it is step by step."). F3/F4 add a
-support offer at the end and set `escalation: "suggest_ticket"` in the trace (step 3 turns this into
-a real ticket). **Never changed by mood**: facts, security blocks, out-of-scope and clarification
-replies, capability-pending replies, permissions.
+rewritten — they get a short opener in front ("No problem — here it is step by step."). F3/F4 lead
+to a support-ticket offer (decided by `escalation/policy.py`, text added by the API — see below).
+**Never changed by mood**: facts, security blocks, out-of-scope and clarification replies,
+capability-pending replies, permissions.
 
 **Measured 2026-09-25**: 11/11 live messages got the right mood (English, Hinglish, emoji, CAPS, and
 a conversation that repeats the same credit-hold problem).
@@ -387,7 +387,9 @@ port 6379) before building this, same diligence as the earlier Milvus-on-Windows
 on a Redis connection error (skips the cache, resolves fresh) — that's just a performance
 degradation, not a security bypass, since the underlying resolve logic doesn't depend on Redis.
 Permission decisions and cache outcomes now emit request-correlated events so allow/deny behavior
-can be followed end to end without exposing credentials.
+can be followed end to end without exposing credentials. (2026-09-25: new permissions
+`INSERT support_ticket` for SALES_REP / AR_CLERK and a new mock group `SUPPORT_ADMIN` with
+`READ admin_console` for the ticket and security-event console.)
 
 ### `context/manager.py`
 **What it is**: builds one normalized `RequestContext` per turn (master prompt §20) — user
@@ -518,6 +520,56 @@ pure small talk without history is cached in memory (512 entries), so repeats ta
 
 ---
 
+## `backend/app/escalation/` (Phase 5 step 3, added 2026-09-25)
+
+Two separate flows, as the master prompt requires: **support tickets** (§55) and **security
+events** (§56). A security attack is never turned into a support ticket.
+
+### `escalation/policy.py`
+**What it is**: decides, for every answer, whether to offer a support ticket. States:
+`ESC_NONE`, `ESC_SUGGEST_TICKET` (offer one), `ESC_CREATE_TICKET_AFTER_CONFIRMATION` (the user asked
+for one). Triggers: **frustration** (F3), **persistent** (F4 — same problem again), **unresolved** (this
+answer and one of the last 3 were NO_ANSWER / CLARIFY), **user_request** ("raise a ticket", "talk to a
+human", "escalate"). Never for BLOCKED or OUT_OF_SCOPE. It never creates a ticket itself — the user
+always confirms (§55). `is_ticket_request` is the offline fallback for the conversation LLM, which
+has a new message kind `escalation_request`; "how do I raise a quotation" is business, not a request.
+
+### `escalation/store.py`
+**What it is**: two Postgres tables on the history pool, created at startup (fail-soft).
+`support_tickets`: user, site, module, form, safe record reference, issue summary, steps attempted,
+the user's optional note, a safe conversation summary (last 6 exchanges, answers cut to 300
+characters), mood, trigger, priority (high for F3/F4), status, time. The ticket is built from the
+**stored** conversation, cut at the answer it was raised from — never from text the browser sends —
+so a user can't put words in a ticket the chatbot never saw. BLOCKED exchanges are left out and
+secrets are redacted. One ticket per answer (a double click returns the same `PTC-000123`). A user can
+only raise tickets on their own conversation. `security_events`: one row per blocked attack (security
+gate) or blocked answer leak (answer validator), with label, severity (high for credential requests,
+data exfiltration, permission bypass, tool abuse, answer leaks), screen, a SHA-256 of the message and a
+redacted 300-character excerpt. When one user is blocked `SECURITY_ALERT_THRESHOLD` (3) times in
+`SECURITY_ALERT_WINDOW_MINUTES` (15), one alert is raised for that burst. A missing permission
+(BLOCKED with a SAFE security label) is **not** a security event.
+
+### `escalation/notifier.py`
+**What it is**: where new tickets and security alerts are sent. Today only `log` (a structured log
+event — the data is already in Postgres). Email or Teams plug in as a class with the same two methods,
+selected by `ESCALATION_NOTIFIER`. A notifier failure never fails the user's request.
+
+**API** (`api/routes.py`): `/chat` returns `escalation` (`state`, `trigger`, `ticket_available`) and
+adds the offer text — "I can raise a support ticket… press 🎫 Create support ticket" when tickets can be
+stored, otherwise "contact your SyteLine support team". `POST /api/tickets` (confirmed ticket, needs
+`INSERT support_ticket`), `GET /api/tickets` (the user's own), `GET /api/admin/tickets` and
+`GET /api/admin/security-events` (need `READ admin_console` — new mock group `SUPPORT_ADMIN`).
+**Chat UI**: a 🎫 Create support ticket button under offered answers → optional note → Confirm →
+"Ticket PTC-000123 created".
+
+**Measured 2026-09-25 (live)**: normal questions and "how do I raise a quotation" → no offer; a
+frustrated message → offer; confirm → `PTC-000005` created (high priority, steps attempted and note
+filled), double click → same ticket; "can I talk to someone from support" → confirmation state; two
+clarifications in a row → offer (unresolved); 3 prompt injections → 3 security events, 1 alert, no
+ticket offer; a sales rep gets 403 on the admin endpoints; a NO_ACCESS user creates no security event.
+
+---
+
 ## `backend/app/history/` (added 2026-09-24 — conversation history)
 
 ### `history/store.py`
@@ -526,7 +578,9 @@ if missing — `chat_sessions` (session_id, user_id, title, created/updated time
 `chat_messages` (every question and answer: content, the follow-up rewrite, route, sources, score,
 decision trace, 👍/👎 rating, request id). Provides `recent_turns` (for follow-ups — skips BLOCKED
 turns so rejected text is never fed to a model), `save_exchange`, `list_sessions`,
-`get_session_messages`, `delete_session`, `delete_all_sessions`, `set_rating`.
+`get_session_messages`, `delete_session`, `delete_all_sessions`, `set_rating`. (2026-09-25: each
+recent turn also carries its `route`, so escalation can count failed attempts; `shared_pool()` and
+`owns_session()` let the escalation store use the same pool and ownership check.)
 
 **Security**: every query is filtered by the trusted `user_id` from the session bootstrap. A user
 can't read, rate, delete, or write into another user's conversation even with its session id.
@@ -654,9 +708,17 @@ unverified, disabled). Runs offline.
 ### `tests/test_tone.py` (added 2026-09-25)
 **What it is**: 50 tests for the tone manager — 23 mood phrasings (including "still"/"again" in
 normal questions staying F0), repeated vs merely related questions, strongest-mood merge, approved
-text kept word for word, support offer only for F3/F4, lenient LLM mood labels, the conversation
+text kept word for word (never rewritten for any mood), lenient LLM mood labels, the conversation
 LLM's mood beating the classifier, the tone reaching the answer prompt after the grounding rules,
 and frustration never weakening a security block or a live-data refusal. Runs offline.
+
+### `tests/test_escalation.py` (added 2026-09-25)
+**What it is**: 38 tests for step 3 — the escalation policy table (every trigger, lookback window,
+never for attacks/off-topic), ticket-request wording vs business questions, the confirmation reply,
+ticket content (blocked turns left out, secrets redacted, cut at the chosen answer), and — against
+`ptc-postgres`, skipped if it's down — one ticket per answer, no tickets on someone else's
+conversation, one security alert per burst, severity levels, which results become security events
+(a missing permission does not), and the ticket/admin API permissions.
 
 ### `tests/__init__.py`
 **What it is**: marks the test suite as a package and keeps future shared test helpers importable.

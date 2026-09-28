@@ -21,7 +21,8 @@ from backend.app.orchestration.state import ChatWorkflowState, WorkflowResult
 from backend.app.qa.retriever import get_qa_index
 from backend.app.quality import tone
 from backend.app.quality.answer_validator import LEAK_REASONS, validate_answer
-from backend.app.quality.tone import apply_tone, rules_mood, strongest, suggests_escalation, tone_instruction
+from backend.app.escalation.policy import decide_escalation
+from backend.app.quality.tone import apply_tone, rules_mood, strongest, tone_instruction
 from backend.app.rag.answer_service import generate_answer
 from backend.app.rag.retriever import CONTEXT_CHAR_BUDGET, TOP_K_RERANKED, get_rag_index
 from backend.app.security.input_gate import evaluate_security
@@ -240,8 +241,6 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
         "sub_intent": classification.sub_intent if classification else None,
         "complexity": classification.complexity.value if classification else None,
         "emotion": classification.emotion.value if classification else None,
-        # Phase 5 step 3 reads this to offer a support ticket.
-        "escalation": "suggest_ticket" if classification and suggests_escalation(classification.emotion) else "none",
         "selected_route": selected_route.value if selected_route else None,
         "tool_candidate": classification.tool_candidate if classification else None,
         "transformations": transformed.transformations if transformed else [],
@@ -500,6 +499,11 @@ class ChatOrchestrator:
             "introduction": "Nice to meet you too. I’m here to help with SyteLine Prospect-to-Cash.",
             "acknowledgement": "Got it. What would you like to work on in SyteLine?",
             "farewell": "Goodbye! I’ll be here when you need more SyteLine help.",
+            "escalation_request": (
+                "Sure — I can raise a support ticket with this conversation attached, so the support "
+                "team can follow up with you. Press 🎫 Create support ticket below to confirm, and add a "
+                "short note about what went wrong if you like."
+            ),
         }
         result = WorkflowResult(
             route="DIRECT_RESPONSE",
@@ -793,6 +797,18 @@ class ChatOrchestrator:
                 "\n\nThis is the general answer. To check a specific record, select it in SyteLine "
                 "(or type its number) and ask again."
             )
+        # Support-ticket offer (§55). The graph only DECIDES; the API adds the offer text
+        # (it knows whether tickets can be stored right now) and the user must confirm.
+        conversation = state.get("conversation")
+        decision = decide_escalation(
+            result.route,
+            _mood(state),
+            state.get("history") or [],
+            user_requested=bool(conversation and conversation.kind == MessageKind.ESCALATION_REQUEST),
+        )
+        result.escalation = decision.state.value
+        result.decision_trace["escalation"] = decision.state.value
+        result.decision_trace["escalation_trigger"] = decision.trigger
         log_event(
             logger,
             "orchestration_completed",

@@ -410,10 +410,95 @@ function buildCopyButton(text) {
   return button;
 }
 
+// Phase 5 step 3: support ticket, created only after the user confirms (§55).
+function ticketOffered(escalation, decisionTrace) {
+  // Live answers carry `escalation` (with ticket_available); answers reloaded from history only
+  // have the stored decision trace — the server re-checks availability when the ticket is sent.
+  if (escalation) return escalation.state !== "ESC_NONE" && escalation.ticket_available;
+  return Boolean(decisionTrace?.escalation && decisionTrace.escalation !== "ESC_NONE");
+}
+
+function buildTicketPanel(sessionIdAtRender, dbId) {
+  const panel = document.createElement("div");
+  panel.className = "ticket-panel";
+
+  const openBtn = document.createElement("button");
+  openBtn.type = "button";
+  openBtn.className = "ticket-button";
+  openBtn.textContent = "🎫 Create support ticket";
+  panel.appendChild(openBtn);
+
+  openBtn.addEventListener("click", () => {
+    openBtn.remove();
+    const note = document.createElement("textarea");
+    note.className = "ticket-note";
+    note.rows = 2;
+    note.maxLength = 1000;
+    note.placeholder = "Optional: what went wrong, error message, what you already tried";
+    note.setAttribute("aria-label", "Note for the support team");
+
+    const actions = document.createElement("div");
+    actions.className = "ticket-actions";
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "ticket-button primary";
+    confirmBtn.textContent = "Confirm ticket";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "ticket-button";
+    cancelBtn.textContent = "Cancel";
+    actions.append(confirmBtn, cancelBtn);
+
+    const status = document.createElement("div");
+    status.className = "ticket-status";
+    panel.append(note, actions, status);
+    note.focus();
+
+    cancelBtn.addEventListener("click", () => {
+      panel.replaceWith(buildTicketPanel(sessionIdAtRender, dbId));
+    });
+    confirmBtn.addEventListener("click", async () => {
+      confirmBtn.disabled = cancelBtn.disabled = true;
+      status.textContent = "Creating ticket…";
+      const context = readContextFromInputs();
+      try {
+        const response = await fetch("/api/tickets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            session_id: sessionIdAtRender,
+            message_id: dbId,
+            note: note.value.trim() || null,
+            simulated_group: context.simulated_group,
+            context: { site: context.site, module: context.module, form: context.form },
+          }),
+        });
+        if (!response.ok) throw new Error(`Server returned ${response.status}`);
+        const ticket = await response.json();
+        panel.innerHTML = "";
+        const done = document.createElement("div");
+        done.className = "ticket-status success";
+        done.textContent = ticket.created
+          ? `🎫 Ticket ${ticket.ticket_ref} created — the support team will follow up with you.`
+          : `🎫 Ticket ${ticket.ticket_ref} was already raised for this answer.`;
+        panel.appendChild(done);
+      } catch (err) {
+        console.error("Ticket request failed", err);
+        status.textContent = "Couldn’t create the ticket right now. Please contact your SyteLine support team.";
+        confirmBtn.disabled = cancelBtn.disabled = false;
+      }
+    });
+  });
+  return panel;
+}
+
 function renderMessage(
   text,
   sender,
-  { route, source, sources, score, timestamp, decisionTrace, id, rating, sessionId, onRetry, resolvedQuery } = {}
+  {
+    route, source, sources, score, timestamp, decisionTrace, id, dbId, rating, sessionId, onRetry,
+    resolvedQuery, escalation,
+  } = {}
 ) {
   const row = document.createElement("div");
   row.className = `message ${sender}`;
@@ -492,6 +577,9 @@ function renderMessage(
       src.className = "source-note";
       src.textContent = `Source: ${citation}${typeof score === "number" ? ` · score ${score.toFixed(2)}` : ""}`;
       column.appendChild(src);
+    }
+    if (dbId && ticketOffered(escalation, decisionTrace)) {
+      column.appendChild(buildTicketPanel(sessionId || activeSessionId, dbId));
     }
   } else if (sender === "user" && timestamp) {
     const footer = document.createElement("div");
@@ -880,6 +968,7 @@ async function requestAnswerFor(query) {
       id: newMessageId(),
       dbId: result.message_id,
       resolvedQuery: result.resolved_query,
+      escalation: result.escalation,
       sessionId: activeSessionId,
       route: result.route,
       source: result.source,

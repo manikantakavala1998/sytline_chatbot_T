@@ -51,7 +51,7 @@ LEAK_REASONS = ("secret_pattern", "prompt_text")
 
 # ── Rule checks ────────────────────────────────────────────────────────
 
-_SECRET_PATTERNS = [
+SECRET_PATTERNS = _SECRET_PATTERNS = [
     re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}"),  # OpenAI-style key
     re.compile(r"\bBearer\s+[A-Za-z0-9._\-]{20,}", re.IGNORECASE),
     re.compile(r"\b(?:password|passwd|api[_\s-]?key|secret)\s*[:=]\s*\S{4,}", re.IGNORECASE),
