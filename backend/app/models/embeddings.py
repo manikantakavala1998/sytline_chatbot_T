@@ -34,7 +34,8 @@ def embed(texts: list[str]) -> np.ndarray:
     if not texts:
         return np.zeros((0, settings.embedding_dim))
     model = get_model()
-    return model.encode(texts, normalize_embeddings=True, convert_to_numpy=True)
+    # No progress bar: the startup trace reports the count and the time instead.
+    return model.encode(texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
 
 
 def embed_query(texts: list[str]) -> np.ndarray:

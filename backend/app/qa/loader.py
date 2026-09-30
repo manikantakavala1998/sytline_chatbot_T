@@ -21,7 +21,8 @@ from pathlib import Path
 import pandas as pd
 
 from backend.app.config import BASE_DIR
-from backend.app.utils.logger import get_logger
+from backend.app.utils import trace
+from backend.app.utils.logger import get_logger, log_event
 
 QA_ROOT = BASE_DIR / "data" / "qa" / "prospect_to_cash"
 
@@ -42,18 +43,23 @@ class QARecord:
     match_texts: list[str] = field(default_factory=list)  # canonical question + all variations
 
 
-def _load_one_file(path: Path, level: str) -> list[QARecord]:
+def _load_one_file(path: Path, level: str) -> tuple[list[QARecord], dict[str, int]]:
+    """Returns the usable records and why the other rows were skipped (for the startup trace)."""
     qa_df = pd.read_excel(path, sheet_name="qa_master", engine="openpyxl")
     try:
         variations_df = pd.read_excel(path, sheet_name="question_variations", engine="openpyxl")
     except ValueError:
         variations_df = pd.DataFrame(columns=["qa_id", "question_variation"])
 
-    qa_df = qa_df[
-        (qa_df["approval_status"].astype(str).str.upper() == "APPROVED")
-        & (qa_df["active"].astype(bool))
-        & (qa_df["source_reference"].astype(str).str.strip() != "PTC Training Guide")
-    ]
+    approved = qa_df["approval_status"].astype(str).str.upper() == "APPROVED"
+    active = qa_df["active"].astype(bool)
+    real_source = qa_df["source_reference"].astype(str).str.strip() != "PTC Training Guide"
+    skipped = {
+        "not approved": int((~approved).sum()),
+        "inactive": int((approved & ~active).sum()),
+        "placeholder source": int((approved & active & ~real_source).sum()),
+    }
+    qa_df = qa_df[approved & active & real_source]
 
     variations_by_qa_id: dict[str, list[str]] = {}
     for _, row in variations_df.iterrows():
@@ -78,21 +84,35 @@ def _load_one_file(path: Path, level: str) -> list[QARecord]:
                 match_texts=match_texts,
             )
         )
-    return records
+    return records, skipped
+
+
+# Both indexes (Fast Q&A and the unified Excel + Markdown index) read the same workbooks at
+# startup; read them once.
+_cache: dict[Path, list[QARecord]] = {}
 
 
 def load_qa_records(root: Path = QA_ROOT) -> list[QARecord]:
+    if root in _cache:
+        return _cache[root]
     if not root.exists():
-        logger.info("Q&A folder %s does not exist yet — skipping Fast Q&A ingestion", root)
+        trace.startup("Excel Q&A", f"folder {root} not found — no curated answers")
         return []
 
     records: list[QARecord] = []
     files = sorted(root.glob("*.xlsx"))
-    logger.info("Ingesting Fast Q&A: found %d level file(s) in %s", len(files), root)
+    shown = root.relative_to(BASE_DIR) if root.is_relative_to(BASE_DIR) else root
+    trace.startup("Excel Q&A (curated answers)", f"{len(files)} workbook(s) in {shown}")
     for qa_file in files:
-        level = qa_file.stem
-        level_records = _load_one_file(qa_file, level)
-        logger.info("  %-24s -> %d approved+active row(s)", qa_file.name, len(level_records))
+        level_records, skipped = _load_one_file(qa_file, qa_file.stem)
+        wordings = sum(len(r.match_texts) for r in level_records)
+        reasons = ", ".join(f"{n} {why}" for why, n in skipped.items() if n)
+        trace.startup_detail(
+            f"{qa_file.name:<30} {len(level_records):>3} row(s) used · {wordings:>3} question wording(s)"
+            + (f" · skipped: {reasons}" if reasons else "")
+        )
         records.extend(level_records)
-    logger.info("Fast Q&A ingestion complete: %d total records", len(records))
+    trace.startup("Excel Q&A loaded", f"{len(records)} approved + active row(s)")
+    log_event(logger, "qa_ingestion_complete", files=len(files), records=len(records))
+    _cache[root] = records
     return records

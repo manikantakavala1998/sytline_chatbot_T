@@ -29,14 +29,17 @@ Outcome:
 
 import json
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Callable
 
 from openai import OpenAI
 
 from backend.app.config import settings
+from backend.app.monitoring.usage import metered_create
 from backend.app.rag.answer_service import build_context
 from backend.app.rag.markdown_processor import MarkdownChunk
+from backend.app.utils import trace as rt  # "rt" = request trace; ValidationResult has its own .trace()
 from backend.app.utils.logger import get_logger, log_event
 
 logger = get_logger(__name__)
@@ -175,7 +178,7 @@ class GroundingCheck:
 
 
 def llm_grounding_check(question: str, answer: str, evidence: str) -> GroundingCheck:
-    response = _get_client().chat.completions.create(
+    response = metered_create("grounding_check", _get_client(),
         model=settings.answer_validation_model,
         temperature=0,
         max_tokens=300,
@@ -220,12 +223,26 @@ def _check(question: str, answer: str, evidence: str, request_id: str) -> tuple[
     """Returns (issues, answers_question, llm_checked)."""
     issues = rule_issues(answer, question, evidence)
     refusal = looks_not_found(answer)
+    rt.detail(f"    rules: numbers not in the evidence / 'I changed it' claims → "
+              + ("none" if not issues else f"{len(issues)} issue(s): " + "; ".join(rt.clean(i, 90) for i in issues)))
+    if refusal:
+        rt.detail("    rules: the draft says the information is not available")
+    started = time.perf_counter()
     try:
         grounding = llm_grounding_check(question, answer, evidence)
-    except Exception:
+    except Exception as exc:
         logger.warning("event=answer_grounding_check_failed request_id=%s action=rules_only", request_id)
+        rt.detail(f"    grounding check ({settings.answer_validation_model}) unavailable: {type(exc).__name__} "
+                  "— rules only")
         return issues, not refusal, False
-    return issues + grounding.unsupported_claims, grounding.answers_question and not refusal, True
+    claims = grounding.unsupported_claims
+    rt.detail(f"    grounding check ({settings.answer_validation_model}, {time.perf_counter() - started:.1f}s): "
+              + ("every statement is backed by the evidence" if not claims
+                 else f"{len(claims)} statement(s) NOT in the evidence:"))
+    for claim in claims:
+        rt.detail(f"      ✗ {rt.text(claim, 150)}")
+    rt.detail(f"    answers the question: {'yes' if grounding.answers_question and not refusal else 'no'}")
+    return issues + claims, grounding.answers_question and not refusal, True
 
 
 def validate_answer(
@@ -236,12 +253,15 @@ def validate_answer(
     regenerate: Callable[[list[str]], str],
 ) -> ValidationResult:
     """Check a generated answer against its evidence; repair once, else replace it."""
+    rt.detail("▸ cross-check the draft against the evidence (hallucination guard)")
     leak = _find_leak(answer)
     if leak:
         log_event(logger, "answer_validation", request_id=request_id, action="replaced", reason=leak)
+        rt.detail(f"    ⛔ the draft contains {leak.replace('_', ' ')} → replaced with a safe message")
         return ValidationResult(action="replaced", answer=UNSAFE_ANSWER, reason=leak, llm_checked=False)
 
     if not settings.answer_validation_enabled:
+        rt.detail("    switched off (ANSWER_VALIDATION_ENABLED=false) → sent unchecked")
         return ValidationResult(action="unverified", answer=answer, reason="validation_disabled", llm_checked=False)
 
     evidence = build_context(chunks)
@@ -249,12 +269,16 @@ def validate_answer(
 
     if not answers_question and not issues:
         log_event(logger, "answer_validation", request_id=request_id, action="not_found", llm_checked=llm_checked)
+        rt.detail("    result: NOT FOUND — the documents don't answer this; counted as a content gap")
         return ValidationResult(action="not_found", answer=answer, llm_checked=llm_checked)
 
     if not issues:
         action = "passed" if llm_checked else "unverified"
         log_event(logger, "answer_validation", request_id=request_id, action=action, llm_checked=llm_checked)
+        rt.detail(f"    result: {'PASSED' if llm_checked else 'UNVERIFIED (rules only)'} — sent as written")
         return ValidationResult(action=action, answer=answer, llm_checked=llm_checked)
+
+    rt.detail(f"    result: {len(issues)} unsupported statement(s) → write the answer again without them")
 
     log_event(logger, "answer_validation_repair_started", request_id=request_id, issues=len(issues))
     # Flagged text comes from the answer (knowledge-base wording), never from secrets — those were
@@ -267,6 +291,7 @@ def validate_answer(
         repaired = ""
 
     if repaired and not _find_leak(repaired):
+        rt.detail("▸ cross-check the re-written answer")
         remaining, answers_question, llm_checked = _check(question, repaired, evidence, request_id)
         if not remaining:
             if not answers_question:
@@ -274,11 +299,14 @@ def validate_answer(
             else:
                 action = "repaired" if llm_checked else "unverified"
             log_event(logger, "answer_validation", request_id=request_id, action=action, fixed=len(issues))
+            rt.detail(f"    result: {action.upper()} — the re-written answer is clean and is sent")
             return ValidationResult(action=action, answer=repaired, unsupported_claims=issues, llm_checked=llm_checked)
         issues = remaining
 
     log_event(logger, "answer_validation", request_id=request_id, action="replaced", reason="not_grounded",
               issues=len(issues))
+    rt.detail("    result: REPLACED — still not backed by the evidence; the user gets “I couldn't confirm this” "
+              "instead of a guess")
     return ValidationResult(
         action="replaced", answer=UNCONFIRMED_ANSWER, unsupported_claims=issues, reason="not_grounded",
         llm_checked=llm_checked,

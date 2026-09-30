@@ -213,7 +213,82 @@ Storage is Postgres only for now; notifications go through a pluggable notifier 
   their attack text, and security staff need severity, counts and alerts — not a support queue.
 - Alert once per burst (3 blocks in 15 minutes by one user), so a scripted attack doesn't send
   hundreds of alerts. A missing permission is not an attack and is not recorded as one.
-- Email / Teams: not built yet (no connection details). The notifier interface is where they go.
+- Email (2026-09-28): tickets and alerts are emailed through Outlook — Microsoft Graph by default
+  (app-only, Mail.Send), SMTP as a fallback — because the team already handles tickets in Outlook.
+  Postgres stays the source of truth; mail is sent in the background and its delivery status is
+  stored per ticket, so a mail failure is visible, never silent, and never blocks the user.
+  The settings also accept the names the team's other bots use, so one `.env` style works for all.
+
+### 15. The feedback console is a work queue, read from the conversation tables (2026-09-28)
+**Decision (Phase 5 step 4): one admin page (`admin.html`, SUPPORT_ADMIN only) turns 👎 answers,
+unanswered questions, tickets and security events into queues with review actions, instead of a
+reporting dashboard. Unanswered questions are grouped by topic so the content team sees "payment
+terms — asked 5 times by 3 users", not five separate rows.**
+
+- Why read the existing tables instead of copying events: nothing new to keep in sync; the answer
+  check, mood and escalation are already in each message's decision trace.
+- Why a review status: without one the same 👎 stays on top forever and nobody knows what was done.
+  "Needs a document" stays visible and goes into the CSV; "reviewed"/"dismissed" leave the queue.
+- Known gap: deleting a chat deletes its feedback. Phase 6 (audit) adds retention that users can't
+  delete.
+- A separate page (not a panel inside the chat) keeps admin data and code away from every user's
+  chat page.
+
+### 16. Two log streams: a readable step trace and technical events (2026-09-28)
+**Decision (user's request): every step of startup and of every question is written as a clear,
+numbered trace to both the terminal and `logs/chatbot.log`; the technical `event=` lines stay in
+the file and leave the terminal unless `LOG_TERMINAL=all`.**
+
+- Why: the old log had ~25 key=value lines per question but never said what was asked, what was
+  searched, which documents scored what, why the Excel answer was or wasn't used, or what the
+  answer check flagged. The trace answers exactly those questions.
+- Question / answer / document text now appears in the trace (it didn't before). It is on by
+  default for development; `LOG_CONVERSATION_TEXT=false` hides it in production. Secrets are
+  always masked and every value stays on one line.
+- It paid off immediately: the trace showed "What is an estimate?" losing its approved Excel answer
+  because the SyteLine-terms rewording won by 0.01. The user's own words now win unless the
+  rewording is better by more than 0.05 (`TERMINOLOGY_MATCH_MARGIN`).
+- It also showed why "what is so" was answered only sometimes: the right customer-order evidence
+  was found, but the answer model only saw "What is SO?". When the question contains an ERP
+  abbreviation (SO, CO, RMA, A/R, POs), the answer model and the answer check now also get the
+  SyteLine-terms wording. Only then — giving the hint for ordinary wording was measured to pull
+  "Explain the invoice lifecycle" toward generic process evidence (2 of 3 runs refused).
+
+### 17. Tables: one vector per row, sentences instead of pipes, short keyword text (2026-09-29)
+**Decision: every Markdown table row is written as a labelled sentence and gets its own vector
+pointing back to its section; the section vector reads 1,500 characters instead of 300; keyword
+search keeps its short text.**
+
+- Why: the data team's documents are mostly tables. Before, 48% of table rows were invisible to
+  search (only the first 300 characters of a section were indexed).
+- Why sentences: an embedding of "Field: Credit Hold Reason · Form: Customer Orders · Meaning: why
+  the order is held" is far closer to "what does credit hold reason mean?" than a row of `|` pipes.
+- Why a vector per row (not a chunk per row): the answer still needs the whole table for context,
+  and the Milvus search already keeps the best vector per section (as for Excel variations).
+- Why keyword search stays short: indexing whole sections (or every row label) was measured to push
+  the right section down for "how to ship an order"; the row vectors already cover the rows.
+- Measured: 0 of 201 rows hidden; three questions about previously hidden rows now return the right
+  section first; regression 50/50, slang 50/52 (the 2 known content gaps).
+
+### 18. An append-only audit trail in Postgres; health alerts computed from it (2026-09-29)
+**Decision (Phase 6): every question and every admin/user action is written to one `audit_events`
+table that the application cannot edit or delete (database trigger); retention is a separate,
+self-audited purge after 365 days. Monitoring reads the same table — no separate metrics system.**
+
+- Why a database trigger instead of "the code doesn't update": the guarantee then holds for any
+  code path, a bug or a manual SQL session. Only the purge sets `audit.retention_purge` for its own
+  transaction.
+- Why keep the audit apart from chat history: users may delete their chats (their right); the
+  audit and the feedback console must still see what was asked and rated (closes the gap in #15).
+- Why hashes plus masked text: the SHA-256 proves which question was asked even when text storage
+  is switched off for production (`AUDIT_STORE_QUESTION_TEXT=false`).
+- Why measure cost per call: six OpenAI calls per document answer (~$0.015); the per-purpose table
+  shows where the money goes before Phase 7 moves calls to an SLM.
+- Why Postgres instead of Prometheus/Grafana now: one server, tens of users; the same numbers can be
+  exported later. Alerts are raised once and resolved once, so a slow afternoon sends one mail, not
+  twelve; rate rules wait for 10 questions so one slow question at night is not an alert.
+- Still to come with Phase 4: SyteLine API monitoring (call times, failures) — there are no live
+  SyteLine calls yet.
 
 ---
 

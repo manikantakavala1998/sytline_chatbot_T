@@ -84,7 +84,8 @@ logging events, and acceptance evidence.
 ---
 
 ## Phase 4 — Prospect-to-Cash Domain Data & Live ERP Integration
-**Status: next.**
+**Status: waiting on the SyteLine team** (API, IDO and RBAC questions in the requirement documents
+sent 2026-09-24/25). Phases 5 and 6 were built first because they don't depend on SyteLine access.
 
 **Pre-Phase-4 knowledge expansion (2026-09-24):** 18 module-wise Markdown articles now cover the
 general Infor CRM-to-cash lifecycle, form/field orientation, workflows, exceptions, and
@@ -109,6 +110,17 @@ tone/frustration manager, support-ticket escalation, security escalation (§72.3
 **Proves**: answers are generated, validated against unauthorized/hallucinated content, toned
 appropriately by role and frustration level, and both escalation paths (support vs. security) work.
 
+**Status: complete (2026-09-28; ticket email live 2026-09-30)**:
+1. Answer validation / hallucination guard — `quality/answer_validator.py` (ADR #12)
+2. Tone by mood F0–F4 — `quality/tone.py` (ADR #13)
+3. Support tickets (confirm-first) + separate security events and alerts — `escalation/` (ADR #14)
+4. Feedback console — `feedback/insights.py`, `admin.html` (ADR #15)
+
+**Outlook ticket email works (2026-09-30)**: Graph login OK, real ticket PTC-000099 emailed. It
+currently uses the shared "Outlook Attachment Downloader" app registration, which has more rights
+than needed (Mail.ReadWrite, Files.ReadWrite.All) — for production, ask IT for a Mail.Send-only app
+limited to the sender mailbox. SLM-default generation stays with Phase 7 (all answers use gpt-4.1 for now).
+
 ---
 
 ## Phase 6 — Audit & Monitoring
@@ -123,6 +135,19 @@ dashboards, alerting, retention policy, and broader AI/SyteLine monitoring.
 
 **Proves**: every request is traceable end to end (who asked, what was retrieved, what was
 allowed, what was answered) and operational health is visible.
+
+**Status: complete (2026-09-29)** (ADR #18):
+1. Durable audit trail — `audit/store.py`: append-only `audit_events` (database trigger), one row
+   per question and per action, 365-day retention purge, Audit tab search
+2. AI monitoring — `monitoring/usage.py`: every OpenAI call metered (purpose, model, time, tokens,
+   cost), time per workflow step and database time
+3. Application monitoring and alerting — `monitoring/health.py`: service checks, 5-minute alert loop
+   (errors, slow answers, fallbacks, answered rate, daily cost, service down), raise-once/resolve-once
+4. Dashboards — 📈 Health and 🧾 Audit tabs in the admin console
+
+**Deferred**: SyteLine API monitoring comes with Phase 4 (no live SyteLine calls yet); health and
+security alert email works but needs `OPS_ALERT_EMAIL` / `SECURITY_ALERT_EMAIL` filled in `.env`
+(until then those alerts are logged and shown in the console only).
 
 ---
 

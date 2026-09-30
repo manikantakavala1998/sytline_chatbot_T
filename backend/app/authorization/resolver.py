@@ -31,10 +31,11 @@ logger = get_logger(__name__)
 _CHAT = {("READ", "assistant"), ("READ", "qa"), ("READ", "markdown_rag")}
 # ("INSERT", "support_ticket"): may raise a support ticket (Phase 5 step 3).
 # ("READ", "admin_console"): may see every ticket and the security events — support/security staff.
+# ("UPDATE", "admin_console"): may review feedback items and change ticket status (Phase 5 step 4).
 MOCK_GROUP_PERMISSIONS: dict[str, set[tuple[str, str]]] = {
     "SALES_REP": _CHAT | {("INSERT", "support_ticket")},
     "AR_CLERK": _CHAT | {("INSERT", "support_ticket")},
-    "SUPPORT_ADMIN": _CHAT | {("INSERT", "support_ticket"), ("READ", "admin_console")},
+    "SUPPORT_ADMIN": _CHAT | {("INSERT", "support_ticket"), ("READ", "admin_console"), ("UPDATE", "admin_console")},
     "NO_ACCESS": set(),
 }
 

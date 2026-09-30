@@ -83,17 +83,19 @@ _FILLER = set(search_tokens(
 ))
 
 
-def _topic_tokens(text: str) -> set[str]:
+def topic_tokens(text: str) -> set[str]:
+    """The words that say what a question is about (stemmed, filler removed). Also used by the
+    feedback console to group unanswered questions by topic."""
     return set(search_tokens(text)) - _FILLER
 
 
 def _repeats_earlier_question(text: str, history: list[Turn]) -> bool:
     """The user asks (nearly) the same question they already asked in this conversation."""
-    current = _topic_tokens(text)
+    current = topic_tokens(text)
     if len(current) < 3:
         return False
     for turn in history:
-        earlier = _topic_tokens(turn.question)
+        earlier = topic_tokens(turn.question)
         if len(earlier) >= 3 and len(current & earlier) / len(current | earlier) >= REPEAT_SIMILARITY:
             return True
     return False

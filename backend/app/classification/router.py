@@ -20,6 +20,7 @@ from backend.app.classification.taxonomy import (
     RouteLabel,
 )
 from backend.app.config import settings
+from backend.app.monitoring.usage import metered_create
 from backend.app.context.manager import RequestContext
 from backend.app.quality.tone import rules_mood
 from backend.app.utils.logger import get_logger, log_event
@@ -163,7 +164,7 @@ def _llm_classification(
     transformed: QueryTransformResult,
     context: RequestContext,
 ) -> QueryClassification:
-    response = _get_client().chat.completions.create(
+    response = metered_create("classifier", _get_client(),
         model=settings.orchestrator_model,
         temperature=0,
         max_tokens=420,

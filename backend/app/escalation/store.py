@@ -53,6 +53,9 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     request_id           TEXT,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Whether the ticket mail went out: pending | sent | failed | not_configured | logged.
+ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS notification_status TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE support_tickets ADD COLUMN IF NOT EXISTS notified_at TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_support_tickets_message
     ON support_tickets (session_id, message_id) WHERE message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS ix_support_tickets_user ON support_tickets (user_id, created_at DESC);
@@ -236,7 +239,7 @@ def create_ticket(
 _TICKET_COLUMNS = (
     "ticket_id, user_id, user_display_name, session_id, message_id, site, module, form, record_type, "
     "record_id, issue_summary, steps_attempted, user_note, conversation_summary, mood, trigger, priority, "
-    "status, created_at"
+    "status, notification_status, created_at"
 )
 
 
@@ -246,6 +249,14 @@ def _ticket_row(row) -> dict:
     ticket["ticket_ref"] = _ticket_ref(ticket["ticket_id"])
     ticket["created_at"] = ticket["created_at"].isoformat()
     return ticket
+
+
+def set_notification_status(ticket_id: int, status: str) -> None:
+    with history_store.shared_pool().connection() as conn:
+        conn.execute(
+            "UPDATE support_tickets SET notification_status = %s, notified_at = now() WHERE ticket_id = %s",
+            (status, ticket_id),
+        )
 
 
 def get_ticket(ticket_id: int, user_id: str) -> dict | None:

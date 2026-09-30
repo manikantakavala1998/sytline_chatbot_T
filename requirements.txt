@@ -25,6 +25,7 @@ python-multipart
 redis
 psycopg[binary]   # PostgreSQL driver — conversation history
 psycopg-pool
+psutil            # process memory / CPU on the admin Health tab
 
 # ── Utilities ─────────────────────────────────────────────────
 python-dotenv

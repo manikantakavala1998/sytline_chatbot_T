@@ -16,6 +16,7 @@ from openai import OpenAI
 
 from backend.app.classification.taxonomy import SecurityLabel, SecurityResult
 from backend.app.config import settings
+from backend.app.monitoring.usage import metered_create
 from backend.app.utils.logger import get_logger, log_event
 
 logger = get_logger(__name__)
@@ -164,7 +165,7 @@ def _semantic_decision(query: str) -> SecurityResult:
         )
 
     labels = ", ".join(label.value for label in SecurityLabel)
-    response = _get_client().chat.completions.create(
+    response = metered_create("security", _get_client(),
         model=settings.orchestrator_model,
         temperature=0,
         max_tokens=180,

@@ -33,6 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 from backend.app.classification.small_talk import chitchat_kind, clean, parse_greeting, strip_leading_greeting
 from backend.app.classification.taxonomy import EmotionLabel
 from backend.app.config import settings
+from backend.app.monitoring.usage import metered_create
 from backend.app.escalation.policy import is_ticket_request
 from backend.app.history.store import Turn
 from backend.app.utils.logger import get_logger, log_event
@@ -231,7 +232,7 @@ def _llm_analysis(query: str, history: list[Turn]) -> ConversationAnalysis:
     content = f"LATEST MESSAGE:\n{query}"
     if history:
         content = f"CONVERSATION SO FAR:\n{_conversation_text(history)}\n\n{content}"
-    response = _get_client().chat.completions.create(
+    response = metered_create("understanding", _get_client(),
         model=settings.orchestrator_model,
         temperature=0,
         max_tokens=280,

@@ -16,6 +16,7 @@ not be guessed once and trusted forever.
 """
 
 import re
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -24,6 +25,7 @@ from rank_bm25 import BM25Okapi
 from backend.app.models.embeddings import embed, embed_query
 from backend.app.qa.glossary import GlossaryEntry, expand_query, load_glossary
 from backend.app.qa.loader import QARecord, load_qa_records
+from backend.app.utils import trace
 from backend.app.utils.logger import get_logger
 from backend.app.utils.search_tokens import search_tokens
 
@@ -66,11 +68,13 @@ class QAIndex:
                 self._entry_records.append(record)
                 self._entry_texts.append(text)
 
-        logger.info("Embedding %d Fast Q&A search entr(y/ies) ...", len(self._entry_texts))
+        started = time.perf_counter()
         tokenized_corpus = [_tokenize(t) for t in self._entry_texts]
         self._bm25 = BM25Okapi(tokenized_corpus) if tokenized_corpus else None
         self._entry_embeddings = embed(self._entry_texts)
-        logger.info("Fast Q&A index ready.")
+        trace.startup("Excel question matcher", f"{len(self._entry_texts)} question wording(s) from "
+                      f"{len(self.records)} row(s) indexed (keywords + meaning) in {time.perf_counter() - started:.1f}s")
+        trace.startup("Business glossary", f"{len(self.glossary)} term(s) for synonym expansion")
 
     def search(self, raw_query: str) -> QAMatch:
         if not self.records:
@@ -82,6 +86,7 @@ class QAIndex:
         # 1. exact match short-circuits everything else
         for record in self.records:
             if any(_normalize(t) == normalized_query for t in record.match_texts):
+                trace.detail(f"  exact wording match: {record.qa_id} {trace.text(record.canonical_question, 90)}")
                 return QAMatch(route="FAST_QA_RESPONSE", record=record, score=1.0, candidates=[(record, 1.0)])
 
         # 2. BM25 (keyword) score, best entry per qa_id, normalized 0-1
@@ -107,6 +112,11 @@ class QAIndex:
         ranked = sorted(self.records, key=lambda r: hybrid_by_qa_id[r.qa_id], reverse=True)
         candidates = [(r, hybrid_by_qa_id[r.qa_id]) for r in ranked[:3]]
         best_record, best_score = candidates[0]
+        trace.detail(f"  searched {trace.text(raw_query, 90)} — top 3 (score = 40% keywords + 60% meaning):")
+        for record, score in candidates:
+            trace.detail(f"      {score:.2f}  (kw {bm25_by_qa_id.get(record.qa_id, 0):.2f} · meaning "
+                         f"{embedding_by_qa_id.get(record.qa_id, 0):.2f})  {record.qa_id} "
+                         f"{trace.text(record.canonical_question, 80)}")
 
         # 5. evidence / match quality gate
         if best_score < WEAK_MATCH_THRESHOLD:

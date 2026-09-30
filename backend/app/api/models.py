@@ -67,5 +67,16 @@ class TicketRequest(BaseModel):
     context: ChatContext | None = None
 
 
+class ReviewRequest(BaseModel):
+    """Admin review of a 👎 answer / unanswered question. status None puts it back in the queue."""
+
+    status: str | None = Field(default=None, pattern=r"^(content_gap|reviewed|dismissed)$")
+    note: str | None = Field(default=None, max_length=1000)
+
+
+class TicketStatusRequest(BaseModel):
+    status: str = Field(pattern=r"^(open|in_progress|resolved|closed)$")
+
+
 class RatingRequest(BaseModel):
     rating: str | None = Field(default=None, pattern=r"^(up|down)$")  # None clears the rating

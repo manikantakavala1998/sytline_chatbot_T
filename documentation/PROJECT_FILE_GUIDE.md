@@ -127,7 +127,9 @@ approved/active records may be used in production. It additionally excludes the 
 **What it is**: reads `data/metadata/business_glossary.csv` and uses it to recognize when a user's
 wording (a synonym or abbreviation, e.g. "credit ceiling", "CO") means the same thing as a formal
 term in the Q&A data ("Credit Limit", "Customer Order") — the acronym-expansion/synonym-mapping
-step from the master prompt's Fast Q&A pipeline (§9).
+step from the master prompt's Fast Q&A pipeline (§9). **Updated 2026-09-29**: also reads the
+`glossary` sheet of every Q&A workbook (the data-team template has one per module) and merges it
+with the CSV — one entry per term, all synonyms kept, no duplicates (`tests/test_glossary_sheets.py`).
 
 ### `qa/retriever.py`
 **What it is**: the actual Fast Q&A search — implements the pipeline from master prompt §9 exactly:
@@ -155,9 +157,40 @@ single turn traceable pin-to-pin across modules. The active file rotates at 5 MB
 older backups so the working log cannot grow forever.
 
 **Privacy/security rule**: never log session tokens, credentials, raw questions, generated
-answers, or retrieved document text. Events record operational metadata only (route, duration,
-score, counts, permission result, and safe context labels). Ingestion visibility remains included:
-each source load, embedding operation, Milvus step, and index build still appears in both outputs.
+answers, or retrieved document text *in event lines*. Events record operational metadata only
+(route, duration, score, counts, permission result, and safe context labels).
+
+**Updated 2026-09-28 — two streams**: *trace lines* (logger `trace`, see `utils/trace.py`) are the
+clear, human-readable story and appear in the terminal **and** the file; *event lines*
+(`log_event`) are the technical `event=… key=value` records and always go to the file, but reach the
+terminal only with `LOG_TERMINAL=all` (default `trace`: trace lines + every warning and error).
+Chatty libraries (httpx, openai, sentence-transformers, pymilvus…) are set to WARNING and the
+embedding progress bar is off, so the trace isn't buried.
+
+### `utils/trace.py` (added 2026-09-28)
+**What it is**: the step-by-step trace, in both the terminal and `logs/chatbot.log`.
+**At startup**: a banner, then one line per Excel workbook (rows used, question wordings, rows
+skipped and why) and per Markdown file (chunks, largest chunk), then embeddings (count, model,
+time), Milvus, BM25, reranker (now loaded at startup), LangGraph, Postgres, tickets + security
+events, ticket email readiness, the console URL, and `READY in N s`.
+**For every question**: a separator, `❓ NEW QUESTION` with the text, who is signed in, the screen,
+permission, how much history was used, then numbered `STEP n` lines (one per LangGraph node, timed —
+see `orchestration/step_trace.py`) with details: the clean question and SyteLine-terms wording, the
+rewrite, intent/complexity/mood/route, the Excel matcher's top 3 with keyword and meaning scores
+and which match was kept, **every search wording** with vector/keyword hit counts and the reranked
+top 3, the final evidence list with scores, **why the approved Excel answer was or wasn't used**,
+the answer model, time and tokens, the draft, **each cross-check** (rules, grounding check and the
+exact statements it flagged, repair, re-check, result), security events, the ticket offer, then
+`💬 ANSWER`, the sources and `✔ DONE in N s`. Tickets, ticket emails and server stop are one-line
+`NOTE`s. Every request's lines carry the first 8 characters of its request id (e.g. `[2f0e4bc9]`).
+**Safety**: text is shown only with `LOG_CONVERSATION_TEXT=true` (default; set `false` in
+production to show only lengths); secrets (keys, bearer tokens, `password=…`) are always masked;
+every value is kept on one line so a user can't forge log lines; a trace error never breaks an answer.
+
+### `orchestration/step_trace.py` (added 2026-09-28)
+**What it is**: wraps each of the 14 LangGraph nodes once so it becomes a numbered, timed step with
+a plain-English title and a description of what it decided. Kept in one place so the trace can't
+drift from the graph (a test checks every node has a title).
 
 ---
 
@@ -191,6 +224,33 @@ DRAFT. Review and replace them with real sourced Q&A before enabling Fast Q&A co
 or edit the `.xlsx` files directly once real content replaces the placeholders. Generated starter
 rows now carry DRAFT approval status. **Superseded (2026-09-24)** by `build_qa_from_knowledge.py`
 below; kept only because that script reuses its column definitions.
+
+### `scripts/validate_knowledge_data.py` (added 2026-09-29)
+**What it is**: the data team's checker — `python -m scripts.validate_knowledge_data <files or
+folder>`. Reads only, changes nothing; exit code 1 on errors. **Markdown**: file name, `# Title`
+and `##` sections, required metadata (Module, Tags, Owner, Reviewed / Approved By, Last Reviewed,
+Version, Source), unfilled `<placeholders>`, TODO/TBD, images, open `[NEEDS CONFIRMATION]` items,
+e-mail addresses / phone numbers (dates excluded) / passwords / keys, duplicate sections, missing
+Section Summary or Keywords, sections too long or empty — then a preview of exactly how the file
+will be split into searchable sections. **Excel**: sheets and columns the loader reads, unique
+`qa_id`s, required cells, allowed values (approval_status, route, intent, active), APPROVED rows
+need a real `approved_by` (not "AUTO-DERIVED … pending") and an effective date, answer length,
+questions ending with "?", the `source_reference` file exists, variations point at real rows (at
+least 3 each, no duplicates), glossary synonyms separated with `|`. Repeated row problems are
+grouped into one line.
+
+### `scripts/convert_docx_to_md.py` (added 2026-09-29)
+**What it is**: turns a module document written in Word (from the Word template) into the
+Markdown file the chatbot loads — Heading 1/2/3 → `#/##/###`, numbered/bullet lists, bold
+`Label:` lines, tables; grey "Note:" writer guidance removed. Checked by a round-trip test: the
+Word template converts to exactly the same 14 sections as the Markdown template.
+
+### `scripts/build_data_templates.py` (added 2026-09-29)
+**What it is**: builds `documentation/data_templates/SyteLine_QA_Template.xlsx` (README, `qa_master`,
+`question_variations`, `glossary`, `allowed_values`; red headers = required, a note on every
+header, dropdown lists, blue EXAMPLE rows set to DRAFT so they can never go live) and the Word
+version of the Markdown module template. Columns and allowed values come from the checker, so
+templates, checker and loader can't drift apart.
 
 ### `scripts/build_qa_from_knowledge.py`
 **What it is**: builds the Fast Q&A Excel files *from the Markdown knowledge base*, one
@@ -233,6 +293,21 @@ document line by line, splits on any heading (except a "Keywords" heading, which
 into the current chunk), and also splits long sections at ~1200 characters with a 3-line overlap
 seed. Extracts each chunk's keyword block and builds the synthetic embedding text
 (`context path + keywords + excerpt`) the same way the Q&A side builds its search text.
+**Updated 2026-09-29 (data-team template)**: keywords are also read from an inline
+`**Keywords:** a, b` line (the HRMS document style), not only a `### Keywords` heading; the
+`Document Metadata`, `Table of Contents` and `Change History` sections are no longer indexed (they
+are for people), and the metadata `**Tags:**` are added to every chunk's keywords; `<!-- writer
+notes -->` are stripped; heading-only chunks are dropped — the current knowledge base had 14 of them
+(each file's `# Title` line), which took search-candidate slots while holding no content (162 → 148
+chunks). **Tables (2026-09-29)**: search used to see only the first 300 characters of a section,
+so **48% of table rows (111 of 228) were invisible to search**. Now `linearize_tables()` turns each
+row into a labelled sentence ("Field: Credit Limit · Form: Customers · Meaning: …"); the section
+vector reads up to 1,500 characters of that readable text; and every row is stored in
+`row_texts` and gets **its own vector** in Milvus (`<chunk_id>::r<n>`, 201 today) pointing back to
+its section — the same pattern as the Excel question variations. The answer model still gets the
+original Markdown table. Keyword (BM25) text deliberately stays short (`search_text` = heading path
++ keywords + the opening 300 characters): indexing whole sections, or every row label, was measured
+to push shipment.md down (rank 11 → 51 / 12) for "how to ship an order".
 
 ### `milvus_store.py`
 **What it is**: the Milvus vector store for document chunks. **Switched from Milvus Lite to a
@@ -389,7 +464,8 @@ degradation, not a security bypass, since the underlying resolve logic doesn't d
 Permission decisions and cache outcomes now emit request-correlated events so allow/deny behavior
 can be followed end to end without exposing credentials. (2026-09-25: new permissions
 `INSERT support_ticket` for SALES_REP / AR_CLERK and a new mock group `SUPPORT_ADMIN` with
-`READ admin_console` for the ticket and security-event console.)
+`READ admin_console` for the ticket and security-event console; 2026-09-28: `UPDATE admin_console`
+for reviewing feedback and changing ticket status.)
 
 ### `context/manager.py`
 **What it is**: builds one normalized `RequestContext` per turn (master prompt §20) — user
@@ -550,9 +626,41 @@ redacted 300-character excerpt. When one user is blocked `SECURITY_ALERT_THRESHO
 (BLOCKED with a SAFE security label) is **not** a security event.
 
 ### `escalation/notifier.py`
-**What it is**: where new tickets and security alerts are sent. Today only `log` (a structured log
-event — the data is already in Postgres). Email or Teams plug in as a class with the same two methods,
-selected by `ESCALATION_NOTIFIER`. A notifier failure never fails the user's request.
+**What it is**: where new tickets and security alerts are sent. `log` writes a structured log event
+only; `outlook` (2026-09-28) also emails them through `escalation/outlook.py`. Mail goes out on a
+background thread, so confirming a ticket never waits for Outlook, and a failure never fails the
+user's request. Each ticket records `notification_status` (sent / failed / not_configured / logged),
+shown as a pill in the console. `startup_check()` logs at startup whether mail is ready and names
+any missing `.env` values (never their contents).
+
+### `escalation/outlook.py` (added 2026-09-28)
+**What it is**: Outlook / Microsoft 365 mail. **Graph** (default): client-credentials token from
+`login.microsoftonline.com/{tenant}` (cached until expiry), then `POST /v1.0/users/{sender}/sendMail`
+— needs an Azure app registration with the **Mail.Send application permission + admin consent**
+(ask IT to limit it to the sender mailbox with an application access policy). **SMTP**:
+`smtp.office365.com:587` with STARTTLS, only if IT allows SMTP AUTH. Ticket mail subject
+`[PTC-000123] HIGH priority — <issue>`, with ticket, priority, who, why offered, screen, record,
+issue, steps already tried, the user's note, a short conversation summary and time; security alert
+subject `[SECURITY ALERT] prompt injection — <user> (3 blocked attempts)`. Every value in the HTML
+is escaped. **Settings** accept two naming styles (the team's other bots use the second):
+`ESCALATION_NOTIFIER=outlook` or `ENABLE_TICKET_RAISING=True`; `OUTLOOK_SEND_METHOD` or `USE_GRAPH_API`;
+`OUTLOOK_SENDER`/`TICKET_FROM_EMAIL`; `OUTLOOK_SENDER_NAME`/`TICKET_FROM_NAME` (SMTP only — Graph
+shows the mailbox's own name); `SUPPORT_TICKET_EMAIL`/`TICKET_RECIPIENT_EMAIL`;
+`OUTLOOK_TENANT_ID`/`GRAPH_TENANT_ID`, `OUTLOOK_CLIENT_ID`/`GRAPH_CLIENT_ID`,
+`OUTLOOK_CLIENT_SECRET`/`GRAPH_CLIENT_SECRET`; `OUTLOOK_SMTP_HOST`/`OUTLOOK_SMTP_SERVER`,
+`OUTLOOK_SMTP_PASSWORD`/`OUTLOOK_PASSWORD`; `SECURITY_ALERT_EMAIL` (optional). The console's
+📧 card shows the setup and has **Send test email** (`POST /api/admin/notifier/test`).
+**2026-09-30 — email design**: every mail is an Outlook-safe layout (nested tables, inline styles,
+640px wide, shrinks on phones; Outlook for Windows ignores flex/grid/CSS classes). The ticket mail
+shows: a blue header with the ticket number and priority/status badges; *what the user needs help
+with*; the user's note; details (who, when, SyteLine screen, record, why it was raised, mood); the
+conversation before the ticket — each question with a plain-words outcome badge ("Answered from
+documents", "Not found in documents", never `MARKDOWN_RAG_RESPONSE`) and the start of the answer;
+*what to do next*; and, when `ADMIN_CONSOLE_URL` is set, an **Open in the feedback console** button.
+Security (dark red header), health (amber / green header) and test mails use the same shell. A
+plain-text copy is kept for SMTP. Working since 2026-09-30 (Graph login and a real test mail OK).
+`documentation/ticket_email_preview.png` shows the ticket mail rendered from sample data.
+**Tests never send real mail**: `tests/conftest.py` forces the log notifier for every test.
 
 **API** (`api/routes.py`): `/chat` returns `escalation` (`state`, `trigger`, `ticket_available`) and
 adds the offer text — "I can raise a support ticket… press 🎫 Create support ticket" when tickets can be
@@ -567,6 +675,93 @@ frustrated message → offer; confirm → `PTC-000005` created (high priority, s
 filled), double click → same ticket; "can I talk to someone from support" → confirmation state; two
 clarifications in a row → offer (unresolved); 3 prompt injections → 3 security events, 1 alert, no
 ticket offer; a sales rep gets 403 on the admin endpoints; a NO_ACCESS user creates no security event.
+
+---
+
+## `backend/app/feedback/` (Phase 5 step 4, added 2026-09-28)
+
+### `feedback/insights.py`
+**What it is**: the feedback loop behind the admin console. Reads the conversation tables and
+returns: a **summary** for the last N days (1–90) — answers, % answered (Excel or documents, out of
+non-blocked questions), 👍/👎 and % rated helpful, open 👎 still to review, breakdowns by answer-check
+result / mood / outcome, tickets by status, security events and alerts; the **👎 answers** with their
+question, answer preview, route, check result, mood and sources; and the **content gaps** — every
+NO_ANSWER question grouped by topic words (same helper as the tone manager's repeat check, ≥60%
+overlap), most asked first, with the different wordings users typed and how many users asked.
+An admin marks an item **📝 needs a document** (stays in the queue, flagged, and in the CSV),
+**✅ reviewed** or **🚫 dismissed** (both leave the queue); "back to queue" clears it — stored in a new
+`feedback_reviews` table. Also changes ticket status (open → in progress → resolved → closed) and
+exports the gaps as CSV for the content team (cells starting with = + - @ are made plain text, so the
+CSV can't run spreadsheet formulas). BLOCKED exchanges never appear (attacks live in the security
+view) and every text is secret-redacted. **Limitation until Phase 6**: a user deleting a chat also
+deletes its 👎 and unanswered questions from these lists.
+
+**API** (`api/routes.py`, all need `READ admin_console`, changes need `UPDATE admin_console` — the
+`SUPPORT_ADMIN` mock group): `GET /api/admin/overview?days=&include_reviewed=`,
+`PUT /api/admin/feedback/{message_id}`, `PUT /api/admin/tickets/{ticket_id}`,
+`GET /api/admin/content-gaps.csv`. Every console access is logged (`admin_console_access`).
+
+### `frontend/chatbot/admin.html` / `admin.css` / `admin.js` (added 2026-09-28)
+**What it is**: the feedback console at `http://127.0.0.1:8001/admin.html`, separate files so the chat
+page is untouched. Filters (test group, period, show reviewed), six stat tiles, three breakdown
+tables, and four tabs — 📝 Content gaps, 👎 Disliked answers, 🎫 Tickets, 🛡️ Security — each with
+its review action. Status colours only for state (priority, severity, alerts), always with an icon
+and a label. Light and dark mode; checked with Playwright at 1366px and 360px (no horizontal scroll,
+no console errors). A non-admin role sees a 🔒 message and none of the data. All user text is set as
+plain text (never HTML), so nothing a user typed can run in the admin's browser.
+
+**2026-09-29 (Phase 6)**: two more tabs — **📈 Health** (live service checks, 24-hour tiles, four
+per-day charts: questions, 95th-percentile response time, OpenAI cost, answer check; OpenAI calls
+per purpose/model; time per workflow step; open and recent alerts; **Run health check now**) and
+**🧾 Audit** (search the audit trail by user, event type, status or request id). Charts are plain
+SVG with a hover tooltip on every mark, colours checked with the palette validator in light and
+dark. `feedback/insights.py` now reads 👎 answers and content gaps from the audit trail when it is
+available, so deleting a chat no longer hides them from the console.
+
+---
+
+## `backend/app/audit/` and `backend/app/monitoring/` (Phase 6, added 2026-09-29)
+
+### `monitoring/usage.py`
+**What it is**: the per-request meter. `usage.start()` opens a measurement for one `/chat` request
+(a contextvar, so parallel requests never mix); every OpenAI call goes through
+`metered_create(purpose, client, **kwargs)`, which records model, purpose (`understanding`,
+`classifier`, `scope`, `security`, `answer`, `answer_repair`, `grounding_check`), time, tokens in/out,
+cost (from `MODEL_PRICES`) and failures; `traced()` records the time of every workflow step and
+the history store records database time. `usage.end()` returns the totals.
+
+### `audit/store.py`
+**What it is**: the durable audit trail — Postgres table `audit_events`, **append-only** (a trigger
+refuses UPDATE and DELETE; only the retention purge may delete, and it audits itself). One row per
+question: request id, user, session, message id, route, status (SUCCESS / NO_ANSWER / CLARIFY /
+BLOCKED / OUT_OF_SCOPE / NOT_AVAILABLE / ERROR), authorization result, security label, answer-check
+result, mood, sources, SHA-256 of question and answer plus the (secret-masked) question text and a
+300-character answer preview (`AUDIT_STORE_QUESTION_TEXT` / `AUDIT_STORE_ANSWER_PREVIEW` turn them
+off), model versions, total / per-step / database time, every OpenAI call, tokens and cost. Also
+one row per action: rating, chat deleted, ticket created, ticket status change, feedback review,
+admin console access. Deleting a chat never deletes its audit rows. Rows older than
+`AUDIT_RETENTION_DAYS` (365) are purged at startup and daily. Fail-soft: if Postgres is down the
+chatbot still answers and the audit endpoints return 503.
+
+### `monitoring/health.py`
+**What it is**: operational health. `service_checks()` pings Postgres, Milvus and Redis and reports
+process memory/CPU and uptime; `window_stats()`, `daily_series()`, `llm_breakdown()`,
+`stage_breakdown()` read the audit trail. `evaluate_alerts()` runs every `MONITOR_INTERVAL_SECONDS`
+(300) over the last `ALERT_WINDOW_MINUTES` (15) and checks: error rate > `ALERT_ERROR_RATE_PCT`,
+95th-percentile response time > `ALERT_P95_LATENCY_SECONDS`, OpenAI fallbacks >
+`ALERT_LLM_FALLBACK_RATE_PCT`, answered < `ALERT_ANSWERED_PCT_MIN` (rate rules only with at least
+`ALERT_MIN_REQUESTS` questions), today's cost > `ALERT_DAILY_COST_USD`, and any service down. An
+alert is raised **once** (table `monitoring_alerts`), logged, traced and sent through the notifier
+(mail to `OPS_ALERT_EMAIL` when Outlook is on), and marked resolved once when the rule passes again.
+The loop is started in `main.py` lifespan and cancelled at shutdown.
+
+**API** (`api/routes.py`, need `READ admin_console`): `GET /api/admin/audit?days=&user_id=&event_type=&status=&request_id=&limit=`,
+`GET /api/admin/health?days=`, `POST /api/admin/health/check` (runs the alert rules now). Each
+answer's trace ends with `🧾 audit #… · ms · LLM calls · tokens · cost`.
+
+**Tests**: `tests/test_audit.py` (12 — metering, cost, append-only trigger, purge, every action type,
+search filters, console after chat delete) and `tests/test_health.py` (12 — each rule, raise-once /
+resolve-once, minimum requests, endpoints and permissions).
 
 ---
 
@@ -720,6 +915,44 @@ ticket content (blocked turns left out, secrets redacted, cut at the chosen answ
 conversation, one security alert per burst, severity levels, which results become security events
 (a missing permission does not), and the ticket/admin API permissions.
 
+### `tests/test_outlook.py` (added 2026-09-28)
+**What it is**: 17 tests for Outlook ticket mail with Graph and SMTP faked (no real mail): subject,
+recipients and HTML escaping, long issues shortened, missing `.env` values named (not shown), Graph
+token + sendMail calls and token reuse, Graph errors never containing the secret, SMTP STARTTLS +
+login, and the notifier recording sent / failed / not_configured / logged without ever raising.
+
+### `tests/test_markdown_template.py` (added 2026-09-29)
+**What it is**: 6 tests for the HRMS-style chunking — metadata / contents / change history not
+indexed, title-only chunk dropped, inline and heading keywords both read, Tags added to every
+section, writer comments stripped, section path keeps the title.
+
+### `tests/test_data_templates.py` (added 2026-09-29)
+**What it is**: 9 tests that keep the data-team templates loadable — the filled example passes the
+checker, the blank template is rejected, the Markdown template indexes all 14 sections and nothing
+else, the Word template converts to the same sections, the Excel template has exactly the loader's
+columns, its example rows never go live, an APPROVED row needs a real reviewer, personal data and
+TODOs are caught, bad file names rejected.
+
+### `tests/test_trace.py` (added 2026-09-28)
+**What it is**: 17 tests for the step-by-step logging — secrets masked, text kept on one line (no
+forged log lines), long text shortened, text hidden when `LOG_CONVERSATION_TEXT=false`, helpers do
+nothing outside a request, the terminal filter (trace + warnings by default, everything with
+`LOG_TERMINAL=all`), the short trace format, real graph runs producing numbered steps that each end
+with a result and a time (greeting, blocked attack, live-data route), a failing node traced and
+re-raised, a describer bug never breaking the node, and every graph node having a title.
+
+### `tests/conftest.py` (added 2026-09-28)
+**What it is**: shared test setup — every test starts with the log-only notifier (run inline), so a
+`.env` that turns Outlook mail on can never make the test suite send real email.
+
+### `tests/test_feedback.py` (added 2026-09-28)
+**What it is**: 15 tests for the feedback console — topic grouping (one gap for the same question
+asked three ways, most asked first, open while any item is open), CSV formula-injection safety, and
+against `ptc-postgres`: 👎 answers listed redacted and without blocked ones, gaps leaving the queue
+when reviewed and returning when cleared, blocked messages can't be reviewed, summary counts, CSV
+export, every console endpoint refused for SALES_REP / AR_CLERK / NO_ACCESS, and input validation
+(bad status, unknown message, period over 90 days).
+
 ### `tests/__init__.py`
 **What it is**: marks the test suite as a package and keeps future shared test helpers importable.
 
@@ -798,6 +1031,19 @@ field/record-level security, enforcement, changes/caching/audit, testing — wit
 a blank Answer column; a deliverables checklist with a Provided column; and a test-user matrix
 (role × user ID, groups, sites, privileges per Prospect-to-Cash area) for them to fill. Its answers
 replace the mock permission data in `authorization/resolver.py` and `session_context.py`.
+
+### `data_templates/` (added 2026-09-29) — for the data team replacing the generic data
+**What it is**: everything the data team needs to prepare our real company data per module.
+`Data_Team_Instructions.docx` / `.pdf` (7 pages: what to deliver, how the chatbot uses it, the 18
+module file names with priority, how to write the document and the workbook, approval workflow,
+Word conversion, the checker, quality checklist, hand-over steps, FAQ).
+`SyteLine_Module_Knowledge_Template.md` / `.docx` (the module document — follows the HRMS style:
+metadata, contents, numbered sections each with Section Summary + Keywords, glossary — plus
+SyteLine sections for roles/permissions, forms and navigation, key fields, one section per task,
+status lifecycle, business rules with exact messages, what comes before/after, issues with
+cause/solution/who fixes). `SyteLine_QA_Template.xlsx` (built by `scripts/build_data_templates.py`).
+`example_credit.md` (a filled Credit example that passes the checker — generic content, shows the
+expected detail).
 
 ### `Chatbot_Manual_Test_Cases.xlsx` (added 2026-09-25)
 **What it is**: 50 manual test cases covering every flowchart level — greetings/small talk (incl.

@@ -18,6 +18,7 @@ Ingestion (embed + index both sources) runs once at startup, same
 drop-and-recreate philosophy as the rest of the project.
 """
 
+import time
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -28,8 +29,10 @@ from backend.app.models.embeddings import embed, embed_query
 from backend.app.qa.loader import QARecord, load_qa_records
 from backend.app.rag import milvus_store
 from backend.app.rag.markdown_processor import MarkdownChunk, process_all_markdown
-from backend.app.rag.reranker import rerank
-from backend.app.utils.logger import get_logger
+from backend.app.rag.reranker import RERANKER_MODEL, rerank
+from backend.app.rag.reranker import get_model as get_reranker
+from backend.app.utils import trace
+from backend.app.utils.logger import get_logger, log_event
 from backend.app.utils.search_tokens import search_tokens
 
 KNOWLEDGE_ROOT = BASE_DIR / "data" / "knowledge" / "prospect_to_cash"
@@ -111,9 +114,10 @@ class RagIndex:
         self._source_type = {c.chunk_id: "markdown" for c in markdown_chunks}
         self._source_type.update({c.chunk_id: "excel" for c in excel_chunks})
 
-        logger.info("Connecting to Milvus at %s ...", settings.milvus_uri)
+        started = time.perf_counter()
         milvus_store.reset_collection()
-        logger.info("Milvus collection '%s' created (dropped + recreated fresh)", milvus_store.COLLECTION_NAME)
+        trace.startup("Milvus vector database", f"{settings.milvus_uri} · collection '{milvus_store.COLLECTION_NAME}' "
+                      f"recreated fresh ({time.perf_counter() - started:.1f}s)")
 
         rows = [
             {
@@ -125,6 +129,20 @@ class RagIndex:
             }
             for c in markdown_chunks
         ]
+        # One extra vector per table row, pointing back to its section (like the Excel question
+        # variations): "what does Credit Hold Reason mean?" matches that row directly, and the
+        # answer still gets the whole section. Search keeps the best vector per section.
+        row_vectors = 0
+        for c in markdown_chunks:
+            for n, row_text in enumerate(c.row_texts):
+                rows.append({
+                    "id": f"{c.chunk_id}::r{n}", "source_type": "markdown", "chunk_id": c.chunk_id,
+                    "source_file": c.source_file, "level": c.level, "full_context_path": c.full_context_path,
+                    "qa_id": "", "question": row_text[:1000], "text": row_text,
+                    "chunk_index": c.chunk_index, "total_chunks": c.total_chunks,
+                    "_embed": f"{c.full_context_path} — {row_text}",
+                })
+                row_vectors += 1
         # One vector per question wording, so every variation can match (replica
         # embeds the question text only, never the answer).
         for record in self.qa_records.values():
@@ -141,24 +159,34 @@ class RagIndex:
                 )
 
         if rows:
-            logger.info(
-                "Embedding %d vector(s): %d Markdown chunk(s) + %d Excel question(s) from %d Q&A row(s) ...",
-                len(rows), len(markdown_chunks), len(rows) - len(markdown_chunks), len(self.qa_records),
-            )
+            started = time.perf_counter()
             embeddings = embed([row.pop("_embed") for row in rows])
+            trace.startup("Embeddings", f"{len(rows)} vector(s) with {settings.embedding_model} "
+                          f"({len(markdown_chunks)} Markdown sections + {row_vectors} table rows + "
+                          f"{len(rows) - len(markdown_chunks) - row_vectors} Excel question wordings) "
+                          f"in {time.perf_counter() - started:.1f}s")
             for row, vector in zip(rows, embeddings):
                 row["vector"] = vector.tolist()
+            started = time.perf_counter()
             milvus_store.insert_rows(rows)
-            logger.info("Milvus insert complete: %d vector(s) stored in '%s'", len(rows), milvus_store.COLLECTION_NAME)
+            trace.startup("Milvus insert", f"{len(rows)} vector(s) stored ({time.perf_counter() - started:.1f}s)")
 
         self._bm25: dict[str, tuple[BM25Okapi, list[MarkdownChunk]]] = {}
         for source in SOURCES:
             source_chunks = [c for c in self.chunks if self._source_type[c.chunk_id] == source]
             if source_chunks:
-                corpus = [_tokenize(f"{c.embed_text} {c.keywords}") for c in source_chunks]
+                # Markdown: heading path + keywords + the section's opening (search_text) — the same
+                # text as before the table work; Excel: the question wordings (embed_text).
+                corpus = [_tokenize(f"{c.search_text or c.embed_text} {c.keywords}") for c in source_chunks]
                 self._bm25[source] = (BM25Okapi(corpus), source_chunks)
-            logger.info("BM25 keyword index: %d %s item(s)", len(source_chunks), source)
-        logger.info("Knowledge index ready (Excel + Markdown in one collection).")
+        trace.startup("BM25 keyword index", " · ".join(
+            f"{source} {sum(1 for c in self.chunks if self._source_type[c.chunk_id] == source)} item(s)"
+            for source in SOURCES))
+        started = time.perf_counter()
+        get_reranker()  # load now, so the first user doesn't wait for it
+        trace.startup("Reranker (cross-encoder)", f"{RERANKER_MODEL} loaded ({time.perf_counter() - started:.1f}s)")
+        log_event(logger, "knowledge_index_ready", vectors=len(rows), markdown=len(markdown_chunks),
+                  excel=len(self.qa_records))
 
     def source_type(self, chunk_id: str) -> str:
         return self._source_type.get(chunk_id, "markdown")
@@ -182,7 +210,18 @@ class RagIndex:
 
         fused = _reciprocal_rank_fusion([vector_ranking, bm25_ranking])
         top_ids = sorted(fused, key=fused.get, reverse=True)[:CANDIDATES_PER_SOURCE]
-        return [cid for cid in top_ids if cid in self._chunks_by_id], best_vector
+        kept = [cid for cid in top_ids if cid in self._chunks_by_id]
+        trace.detail(f"  {source:<8} vector {len(vector_ranking):>2} hit(s) + keyword {len(bm25_ranking):>2} hit(s) "
+                     f"→ fused (RRF) → {len(kept)} candidate(s)"
+                     + (f" · best vector match {max(best_vector.values()):.2f}" if best_vector else ""))
+        return kept, best_vector
+
+    def label(self, chunk: MarkdownChunk) -> str:
+        """Short readable name for the trace: file › section (or the Excel row id + question)."""
+        if self.source_type(chunk.chunk_id) == "excel":
+            record = self.qa_records.get(chunk.chunk_id)
+            return f"{chunk.source_file} › {chunk.chunk_id} “{trace.clean(record.canonical_question, 70) if record else ''}”"
+        return f"{chunk.source_file} › {trace.clean(chunk.full_context_path, 80)}"
 
     def search(self, query: str) -> RagResult:
         if not self.chunks:
@@ -202,6 +241,9 @@ class RagIndex:
         candidates = [self._chunks_by_id[cid] for cid in candidate_ids]
         rerank_scores = rerank(query, [c.text for c in candidates])
         ranked = sorted(zip(candidates, rerank_scores), key=lambda pair: pair[1], reverse=True)
+        trace.detail(f"  reranked {len(candidates)} candidate(s) with the cross-encoder; top 3:")
+        for chunk, score in ranked[:3]:
+            trace.detail(f"      {score:>6.2f}  [{self.source_type(chunk.chunk_id)}] {self.label(chunk)}")
 
         best_score_by_source: dict[str, float] = {}
         for chunk, score in ranked:
@@ -218,8 +260,12 @@ class RagIndex:
                 rescued = next(((c, s) for c, s in ranked if c.chunk_id == nearest_id), None)
                 if rescued:
                     top.append((rescued[0], max(rescued[1], EVIDENCE_THRESHOLD)))
+                    trace.detail(f"  kept a near-exact vector match the reranker had dropped "
+                                 f"({best_vector[nearest_id]:.2f}): {self.label(rescued[0])}")
 
         if not top or top[0][1] < EVIDENCE_THRESHOLD:
+            trace.detail(f"  ✗ best score {top[0][1] if top else float('nan'):.2f} is below the evidence bar "
+                         f"{EVIDENCE_THRESHOLD} — no usable evidence for this wording")
             return RagResult(has_evidence=False, chunks=[], scores=[], best_score_by_source=best_score_by_source)
 
         chunks: list[MarkdownChunk] = []

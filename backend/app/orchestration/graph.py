@@ -6,6 +6,8 @@ boundary: security -> scope -> ambiguity -> transformation -> hierarchical
 classification -> code-enforced routing -> route execution.
 """
 
+import re
+
 from langgraph.graph import END, START, StateGraph
 
 from backend.app.authorization.resolver import resolve_permission
@@ -18,6 +20,8 @@ from backend.app.classification.small_talk import greeting_key_from_label, parse
 from backend.app.classification.taxonomy import EmotionLabel, IntentLabel, QueryClassification, RouteLabel
 from backend.app.history.store import Turn
 from backend.app.orchestration.state import ChatWorkflowState, WorkflowResult
+from backend.app.orchestration.step_trace import traced
+from backend.app.utils import trace
 from backend.app.qa.retriever import get_qa_index
 from backend.app.quality import tone
 from backend.app.quality.answer_validator import LEAK_REASONS, validate_answer
@@ -53,6 +57,11 @@ MULTI_QUESTION_CONTEXT_CHARS = 9000
 # rows 0.88-0.89 ("What is a customer order?" -> order-LINE row). Starter value — re-check
 # with the evaluation set before production (master prompt section 33).
 EXCEL_VERBATIM_MATCH_SCORE = 0.90
+# How much better the SyteLine-terms rewording must match an Excel row to beat the user's own words.
+TERMINOLOGY_MATCH_MARGIN = 0.05
+# An ERP abbreviation in the question (SO, CO, RMA, A/R, POs) — then the answer model also gets the
+# SyteLine-terms wording, because it can't expand the abbreviation itself.
+_ABBREVIATION = re.compile(r"\b(?:[A-Z]{2,5}s?|[A-Z]/[A-Z])\b")
 
 
 def _greet_back(state: ChatWorkflowState, answer: str | None) -> str | None:
@@ -141,8 +150,17 @@ def _best_qa_match(transformed):
     match = index.search(transformed.expanded_query)
     if transformed.terminology_query and match.score < 1.0:
         alternative = index.search(transformed.terminology_query)
-        if alternative.score > match.score:
+        # The user's own words win unless the SyteLine-terms version is clearly better. Found with
+        # the step trace: "What is an estimate?" matched KB-0052 at 0.91, the rewording "estimate
+        # (quotation)" matched KB-0117 at 0.92 — a 0.01 edge picked the wrong row and lost the
+        # approved answer.
+        if alternative.score > match.score + TERMINOLOGY_MATCH_MARGIN:
+            trace.detail(f"  → using the SyteLine-terms match {alternative.candidates[0][0].qa_id} "
+                         f"({alternative.score:.2f} vs {match.score:.2f})")
             match = alternative
+        elif match.candidates:
+            trace.detail(f"  → keeping the user's-words match {match.candidates[0][0].qa_id} ({match.score:.2f}; "
+                         f"the SyteLine-terms version needs > +{TERMINOLOGY_MATCH_MARGIN} to win)")
     return match
 
 
@@ -165,7 +183,12 @@ def _search_each_question(state: ChatWorkflowState):
     else:
         queries = [transformed.expanded_query]
     index = get_rag_index()
-    per_query = [index.search(query) for query in queries]
+    per_query = []
+    for n, query in enumerate(queries, 1):
+        kind = "sub-question" if transformed.expanded_subqueries else ("SyteLine terms" if n == 1 and len(queries) > 1
+                                                                        else "user's words")
+        trace.detail(f"▸ search {n}/{len(queries)} ({kind}): {trace.text(query, 160)}")
+        per_query.append(index.search(query))
 
     if transformed.expanded_subqueries:
         # Different sub-questions: interleave so every part gets evidence.
@@ -203,6 +226,13 @@ def _search_each_question(state: ChatWorkflowState):
         scores.append(score)
         sources.append(index.source_type(chunk.chunk_id))
         running_chars += len(chunk.text)
+    if chunks:
+        trace.detail(f"▸ evidence kept for the answer: {len(chunks)} item(s), {running_chars} chars "
+                     f"(budget {budget}):")
+        for n, (chunk, score, source) in enumerate(zip(chunks, scores, sources), 1):
+            trace.detail(f"    {n}. {score:>6.2f}  [{source}] {index.label(chunk)}")
+    else:
+        trace.detail("▸ evidence kept for the answer: none above the evidence bar")
     return chunks, scores, sources, per_query
 
 
@@ -225,6 +255,25 @@ def _mood(state: ChatWorkflowState) -> EmotionLabel:
     return classification.emotion if classification else EmotionLabel.NORMAL
 
 
+def _verbatim_reason(transformed, chunks, sources, qa_candidate, verbatim: bool) -> str:
+    """Why the approved Excel answer was (or wasn't) shown word for word — for the trace."""
+    if verbatim:
+        return (f"YES — the top evidence is Excel row {qa_candidate[0]}, the same row the question matched "
+                f"({qa_candidate[1]:.2f} ≥ {EXCEL_VERBATIM_MATCH_SCORE}) → approved answer, no generation")
+    if transformed.subqueries:
+        return "NO — several questions in one message; one approved row can't answer them all"
+    if not chunks:
+        return "NO — no evidence at all"
+    if not qa_candidate:
+        return "NO — no Excel row matched the question"
+    if sources[0] != "excel":
+        return f"NO — the strongest evidence is a document section, not Excel row {qa_candidate[0]}"
+    if qa_candidate[0] != chunks[0].chunk_id:
+        return f"NO — the top evidence is Excel row {chunks[0].chunk_id}, but the question matched {qa_candidate[0]}"
+    return (f"NO — question match {qa_candidate[1]:.2f} is below {EXCEL_VERBATIM_MATCH_SCORE} "
+            "→ write an answer from the evidence instead")
+
+
 def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
     security = state.get("security")
     scope = state.get("scope")
@@ -241,6 +290,9 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
         "sub_intent": classification.sub_intent if classification else None,
         "complexity": classification.complexity.value if classification else None,
         "emotion": classification.emotion.value if classification else None,
+        # "llm" or "rules" (LLM unavailable) — the Health tab's fallback rate reads this.
+        "classifier": (None if not classification else
+                       "rules" if classification.reasoning_summary == "deterministic_fallback" else "llm"),
         "selected_route": selected_route.value if selected_route else None,
         "tool_candidate": classification.tool_candidate if classification else None,
         "transformations": transformed.transformations if transformed else [],
@@ -254,20 +306,20 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
 class ChatOrchestrator:
     def __init__(self) -> None:
         builder = StateGraph(ChatWorkflowState)
-        builder.add_node("security_gate", self._security_node)
-        builder.add_node("blocked_response", self._blocked_response_node)
-        builder.add_node("conversation_understanding", self._conversation_node)
-        builder.add_node("scope_check", self._scope_node)
-        builder.add_node("out_of_scope_response", self._out_of_scope_node)
-        builder.add_node("ambiguity_resolution", self._ambiguity_node)
-        builder.add_node("clarify_response", self._clarify_node)
-        builder.add_node("query_transformation", self._transform_node)
-        builder.add_node("query_classification", self._classification_node)
-        builder.add_node("route_selection", self._route_node)
-        builder.add_node("direct_response", self._direct_response_node)
-        builder.add_node("fast_qa", self._fast_qa_node)
-        builder.add_node("markdown_rag", self._rag_node)
-        builder.add_node("capability_pending", self._capability_pending_node)
+        builder.add_node("security_gate", traced("security_gate", self._security_node))
+        builder.add_node("blocked_response", traced("blocked_response", self._blocked_response_node))
+        builder.add_node("conversation_understanding", traced("conversation_understanding", self._conversation_node))
+        builder.add_node("scope_check", traced("scope_check", self._scope_node))
+        builder.add_node("out_of_scope_response", traced("out_of_scope_response", self._out_of_scope_node))
+        builder.add_node("ambiguity_resolution", traced("ambiguity_resolution", self._ambiguity_node))
+        builder.add_node("clarify_response", traced("clarify_response", self._clarify_node))
+        builder.add_node("query_transformation", traced("query_transformation", self._transform_node))
+        builder.add_node("query_classification", traced("query_classification", self._classification_node))
+        builder.add_node("route_selection", traced("route_selection", self._route_node))
+        builder.add_node("direct_response", traced("direct_response", self._direct_response_node))
+        builder.add_node("fast_qa", traced("fast_qa", self._fast_qa_node))
+        builder.add_node("markdown_rag", traced("markdown_rag", self._rag_node))
+        builder.add_node("capability_pending", traced("capability_pending", self._capability_pending_node))
 
         builder.add_edge(START, "security_gate")
         builder.add_conditional_edges(
@@ -442,6 +494,8 @@ class ChatOrchestrator:
         if mood != classification.emotion:
             log_event(logger, "user_mood_adjusted", request_id=state["request_id"],
                       classifier=classification.emotion.value, mood=mood.value)
+            trace.detail(f"mood from the user's own words: {mood.value} (the classifier alone said "
+                         f"{classification.emotion.value} from the cleaned-up question)")
         classification.emotion = mood
         return {"classification": classification}
 
@@ -593,6 +647,7 @@ class ChatOrchestrator:
         if qa_candidate is None and not transformed.subqueries:
             # Routes that skip the Fast Q&A node (e.g. troubleshooting) still get the question match.
             if resolve_permission(state["user"], "READ", "qa", request_id=state["request_id"]).allowed:
+                trace.detail("▸ Excel curated answers — does the question match one?")
                 match = _best_qa_match(transformed)
                 if match.candidates:
                     qa_candidate = (match.candidates[0][0].qa_id, float(match.candidates[0][1]))
@@ -638,14 +693,17 @@ class ChatOrchestrator:
 
         # Single question whose top-ranked evidence (of 10 Excel + 10 Markdown) is the same curated
         # row the question itself strongly matched -> show the approved Excel answer verbatim.
-        if (
+        verbatim = (
             not transformed.subqueries
             and chunks
             and sources[0] == "excel"
             and qa_candidate
             and qa_candidate[0] == chunks[0].chunk_id
             and qa_candidate[1] >= EXCEL_VERBATIM_MATCH_SCORE
-        ):
+        )
+        trace.detail("▸ cross-check: use an approved Excel answer word for word?")
+        trace.detail(f"    {_verbatim_reason(transformed, chunks, sources, qa_candidate, bool(verbatim))}")
+        if verbatim:
             record = get_rag_index().qa_records[chunks[0].chunk_id]
             log_event(logger, "excel_answer_selected", request_id=state["request_id"], qa_id=record.qa_id)
             return {
@@ -663,6 +721,7 @@ class ChatOrchestrator:
             }
 
         if not chunks:
+            trace.detail("▸ nothing to answer from → polite NO_ANSWER (listed as a content gap in the console)")
             return {
                 "result": WorkflowResult(
                     route="NO_ANSWER",
@@ -688,19 +747,30 @@ class ChatOrchestrator:
         question = state["transformed"].rewritten_query
         mood = _mood(state)
         style = tone_instruction(mood)
+        # The SyteLine-terms hint only when the question has an abbreviation the answer model can't
+        # read ("What is SO?"). For ordinary wording it just re-phrases the question and was
+        # measured to pull the answer toward generic "process" evidence (TC-34 invoice lifecycle).
+        terminology = (
+            transformed.terminology_query
+            if transformed.terminology_query and not transformed.subqueries and _ABBREVIATION.search(question)
+            else None
+        )
+        trace.detail(f"▸ write the answer from the {len(chunks)} evidence item(s) — tone for mood {mood.value}"
+                     + (f" · SyteLine-terms hint {trace.text(terminology, 100)}" if terminology else ""))
         try:
-            answer = generate_answer(question, chunks, tone=style)
+            answer = generate_answer(question, chunks, tone=style, terminology=terminology)
         except Exception:
             logger.exception("event=answer_generation_failed request_id=%s", state["request_id"])
             raise
 
         # Hallucination guard: every claim must come from the evidence; repair once, else refuse.
         validation = validate_answer(
-            question,
+            f"{question} (in SyteLine terms: {terminology})" if terminology else question,
             answer,
             chunks,
             request_id=state["request_id"],
-            regenerate=lambda claims: generate_answer(question, chunks, avoid_claims=claims, tone=style),
+            regenerate=lambda claims: generate_answer(question, chunks, avoid_claims=claims, tone=style,
+                                                      terminology=terminology),
         )
         source_labels = [f"{chunk.source_file} — {chunk.full_context_path}" for chunk in chunks]
         used = sorted(set(sources))

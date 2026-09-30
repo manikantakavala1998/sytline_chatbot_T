@@ -10,10 +10,14 @@ per the build roadmap — this only needs to prove grounded, cited answers
 work end to end.
 """
 
+import time
+
 from openai import OpenAI
 
 from backend.app.config import settings
+from backend.app.monitoring.usage import metered_create
 from backend.app.rag.markdown_processor import MarkdownChunk
+from backend.app.utils import trace
 
 _client: OpenAI | None = None
 
@@ -51,16 +55,23 @@ def generate_answer(
     chunks: list[MarkdownChunk],
     avoid_claims: list[str] | None = None,
     tone: str | None = None,
+    terminology: str | None = None,
 ) -> str:
     """`avoid_claims`: statements the answer validator found unsupported in an earlier draft.
-    `tone`: style guidance for the user's mood (quality/tone.py) — never changes the facts."""
+    `tone`: style guidance for the user's mood (quality/tone.py) — never changes the facts.
+    `terminology`: the same question in SyteLine terms ("What is SO?" -> "What is a sales order
+    (SO)? Customer Order"), so abbreviations and slang are understood; the reply still answers
+    the user's own wording."""
     context = build_context(chunks)
     system = SYSTEM_PROMPT
     if tone:
         system += f"\n\nTone for this reply (style only — the rules above still come first): {tone}"
+    question = f"Question: {query}"
+    if terminology and terminology.strip().casefold() != query.strip().casefold():
+        question += f"\n(The same question in SyteLine terms: {terminology})"
     messages = [
         {"role": "system", "content": system},
-        {"role": "user", "content": f"Retrieved Context:\n{context}\n\nQuestion: {query}"},
+        {"role": "user", "content": f"Retrieved Context:\n{context}\n\n{question}"},
     ]
     if avoid_claims:
         listed = "\n".join(f"- {claim}" for claim in avoid_claims)
@@ -75,10 +86,18 @@ def generate_answer(
             ),
         })
 
-    response = get_client().chat.completions.create(
+    started = time.perf_counter()
+    response = metered_create("answer_repair" if avoid_claims else "answer", get_client(),
         model=settings.primary_llm,
         temperature=settings.temperature,
         max_tokens=settings.max_tokens,
         messages=messages,
     )
-    return (response.choices[0].message.content or "").strip()
+    answer = (response.choices[0].message.content or "").strip()
+    usage = getattr(response, "usage", None)
+    tokens = f" · tokens in {usage.prompt_tokens} / out {usage.completion_tokens}" if usage else ""
+    trace.detail(f"    {'re-written without the flagged statements' if avoid_claims else 'written'} by "
+                 f"{settings.primary_llm} in {time.perf_counter() - started:.1f}s{tokens} · {len(answer)} chars "
+                 f"from {len(context)} chars of evidence")
+    trace.detail(f"    draft: {trace.text(answer, 220)}")
+    return answer

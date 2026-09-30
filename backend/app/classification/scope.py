@@ -9,6 +9,7 @@ from openai import OpenAI
 from backend.app.classification.small_talk import is_small_talk
 from backend.app.classification.taxonomy import ScopeLabel, ScopeResult
 from backend.app.config import settings
+from backend.app.monitoring.usage import metered_create
 from backend.app.context.manager import RequestContext
 from backend.app.qa.glossary import load_glossary
 from backend.app.utils.logger import get_logger, log_event
@@ -76,7 +77,7 @@ def _llm_scope(query: str, context: RequestContext) -> ScopeResult:
         raise RuntimeError("orchestrator LLM is disabled")
 
     labels = ", ".join(label.value for label in ScopeLabel)
-    response = _get_client().chat.completions.create(
+    response = metered_create("scope", _get_client(),
         model=settings.orchestrator_model,
         temperature=0,
         max_tokens=140,

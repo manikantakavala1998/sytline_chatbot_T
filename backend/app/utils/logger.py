@@ -1,12 +1,16 @@
 """Central application logging.
 
-Every application event is written to both the terminal and one active
-log file: ``logs/chatbot.log``.  The same human-readable format is used in
-both places, and request-scoped events include a request ID so a complete
-chat turn can be followed from HTTP entry to the final response.
+Two streams share the terminal and one active log file, ``logs/chatbot.log``:
+
+* **Trace lines** (logger ``trace``, written by ``utils/trace.py``): the clear, numbered,
+  human-readable story of startup and of every question — always in the terminal and the file.
+* **Event lines** (``log_event``): technical ``event=... key=value`` lines with the full request
+  ID. Always in the file; in the terminal only when ``LOG_TERMINAL=all`` (default ``trace``
+  shows trace lines plus every warning and error).
 
 Never pass secrets, session tokens, raw user questions, generated answers,
-or retrieved document text into :func:`log_event`.
+or retrieved document text into :func:`log_event` — question/answer text belongs only in the
+trace, which masks secrets and can be switched off with ``LOG_CONVERSATION_TEXT=false``.
 """
 
 import logging
@@ -19,9 +23,43 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 LOG_DIR = PROJECT_ROOT / "logs"
 LOG_FILE = LOG_DIR / "chatbot.log"
+TRACE_LOGGER_NAME = "trace"
+# Chatty libraries: their INFO lines (every OpenAI HTTP call, model downloads) drown the trace.
+QUIET_LIBRARIES = ("httpx", "httpcore", "openai", "sentence_transformers", "urllib3", "pymilvus", "huggingface_hub")
 
 _configured = False
 _configuration_lock = threading.Lock()
+
+
+class _Formatter(logging.Formatter):
+    """Trace lines: `time  message`. Everything else: `time  LEVEL  module  message`."""
+
+    def __init__(self) -> None:
+        super().__init__(fmt="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        self._trace = logging.Formatter(fmt="%(asctime)s  %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    def format(self, record: logging.LogRecord) -> str:
+        return self._trace.format(record) if record.name == TRACE_LOGGER_NAME else super().format(record)
+
+
+class _TerminalFilter(logging.Filter):
+    """LOG_TERMINAL=trace (default): trace lines + warnings/errors. LOG_TERMINAL=all: everything."""
+
+    def __init__(self, mode: str) -> None:
+        super().__init__()
+        self.show_all = mode.lower() == "all"
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return self.show_all or record.name == TRACE_LOGGER_NAME or record.levelno >= logging.WARNING
+
+
+def _terminal_mode() -> str:
+    try:
+        from backend.app.config import settings  # lazy: config must never depend on logging
+
+        return settings.log_terminal
+    except Exception:
+        return "trace"
 
 
 def _configure_logging() -> None:
@@ -35,16 +73,16 @@ def _configure_logging() -> None:
 
         LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-        formatter = logging.Formatter(
-            fmt="%(asctime)s  %(levelname)-8s  %(name)s  %(message)s",
-            datefmt="%Y-%m-%d %H:%M:%S",
-        )
+        formatter = _Formatter()
         root_logger = logging.getLogger()
         root_logger.setLevel(logging.INFO)
+        for library in QUIET_LIBRARIES:
+            logging.getLogger(library).setLevel(logging.WARNING)
 
         terminal_handler = logging.StreamHandler(sys.stdout)
         terminal_handler.setLevel(logging.INFO)
         terminal_handler.setFormatter(formatter)
+        terminal_handler.addFilter(_TerminalFilter(_terminal_mode()))
         terminal_handler._syteline_handler = True  # type: ignore[attr-defined]
 
         file_handler = RotatingFileHandler(
