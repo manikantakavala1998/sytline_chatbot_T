@@ -340,7 +340,7 @@ function renderMessages(session) {
       renderMessage(msg.text, msg.sender, msg);
     }
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  messagesEl.scrollTop = messages.length === 0 ? 0 : messagesEl.scrollHeight;
 }
 
 function buildRatingGroup(sessionIdAtRender, messageId, currentRating) {
@@ -422,16 +422,36 @@ function buildTicketPanel(sessionIdAtRender, dbId) {
   const panel = document.createElement("div");
   panel.className = "ticket-panel";
 
+  const heading = document.createElement("div");
+  heading.className = "ticket-panel-heading";
+  const icon = document.createElement("span");
+  icon.className = "ticket-panel-icon";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "🎫";
+  const headingText = document.createElement("div");
+  const title = document.createElement("strong");
+  title.textContent = "Need a person to help?";
+  const description = document.createElement("span");
+  description.textContent = "Share this conversation with the support team.";
+  headingText.append(title, description);
+  heading.append(icon, headingText);
+  panel.appendChild(heading);
+
   const openBtn = document.createElement("button");
   openBtn.type = "button";
   openBtn.className = "ticket-button";
-  openBtn.textContent = "🎫 Create support ticket";
+  openBtn.textContent = "Create support ticket →";
   panel.appendChild(openBtn);
 
   openBtn.addEventListener("click", () => {
     openBtn.remove();
     const note = document.createElement("textarea");
+    const noteLabel = document.createElement("label");
+    noteLabel.className = "ticket-note-label";
+    noteLabel.textContent = "Tell support what happened (optional)";
     note.className = "ticket-note";
+    note.id = `ticket-note-${dbId}`;
+    noteLabel.htmlFor = note.id;
     note.rows = 2;
     note.maxLength = 1000;
     note.placeholder = "Optional: what went wrong, error message, what you already tried";
@@ -451,7 +471,7 @@ function buildTicketPanel(sessionIdAtRender, dbId) {
 
     const status = document.createElement("div");
     status.className = "ticket-status";
-    panel.append(note, actions, status);
+    panel.append(noteLabel, note, actions, status);
     note.focus();
 
     cancelBtn.addEventListener("click", () => {
@@ -475,12 +495,12 @@ function buildTicketPanel(sessionIdAtRender, dbId) {
         });
         if (!response.ok) throw new Error(`Server returned ${response.status}`);
         const ticket = await response.json();
-        panel.innerHTML = "";
+        panel.replaceChildren();
         const done = document.createElement("div");
         done.className = "ticket-status success";
         done.textContent = ticket.created
-          ? `🎫 Ticket ${ticket.ticket_ref} created — the support team will follow up with you.`
-          : `🎫 Ticket ${ticket.ticket_ref} was already raised for this answer.`;
+          ? `✓ Ticket ${ticket.ticket_ref} created — the support team will follow up with you.`
+          : `✓ Ticket ${ticket.ticket_ref} was already raised for this answer.`;
         panel.appendChild(done);
       } catch (err) {
         console.error("Ticket request failed", err);
@@ -844,9 +864,12 @@ if (!activeSessionId) {
   renderMessages(findSession(sessions, activeSessionId));
 }
 
-if (window.matchMedia("(max-width: 960px)").matches) {
-  sidebarEl.classList.add("collapsed");
+const mobileSidebarQuery = window.matchMedia("(max-width: 960px)");
+function syncSidebarForViewport() {
+  sidebarEl.classList.toggle("collapsed", mobileSidebarQuery.matches);
 }
+syncSidebarForViewport();
+mobileSidebarQuery.addEventListener("change", syncSidebarForViewport);
 
 applyContextToInputs(loadSimulatedContext());
 updateContextSummary();
@@ -919,6 +942,10 @@ scrollBottomButtonEl.addEventListener("click", () => {
 });
 
 sidebarToggleEl.addEventListener("click", () => {
+  if (mobileSidebarQuery.matches && !contextPanelEl.classList.contains("collapsed")) {
+    contextPanelEl.classList.add("collapsed");
+    contextToggleEl.setAttribute("aria-expanded", "false");
+  }
   sidebarEl.classList.toggle("collapsed");
 });
 
@@ -927,6 +954,9 @@ sidebarOverlayEl.addEventListener("click", () => {
 });
 
 contextToggleEl.addEventListener("click", () => {
+  if (mobileSidebarQuery.matches) {
+    sidebarEl.classList.add("collapsed");
+  }
   contextPanelEl.classList.toggle("collapsed");
   contextToggleEl.setAttribute("aria-expanded", String(!contextPanelEl.classList.contains("collapsed")));
 });

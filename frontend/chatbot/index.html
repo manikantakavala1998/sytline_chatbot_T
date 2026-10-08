@@ -4,11 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SyteLine Prospect-to-Cash Assistant</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="style.css?v=2026-09-30c" />
 </head>
 <body>
   <div class="layout">
-    <aside class="sidebar" id="sidebar">
+    <aside class="sidebar collapsed" id="sidebar">
       <div class="sidebar-brand">
         <div class="sidebar-mark" aria-hidden="true">🤖</div>
         <div>
@@ -110,7 +110,8 @@
             <textarea
               id="chat-input"
               rows="1"
-              placeholder="Ask about orders, credit, shipments, invoices, or payments"
+              placeholder="Ask a question…"
+              aria-label="Ask a SyteLine question"
               maxlength="1000"
             ></textarea>
             <button type="submit" id="send-button" aria-label="Send message">
@@ -129,6 +130,6 @@
     </div>
   </div>
 
-  <script src="script.js"></script>
+  <script src="script.js?v=2026-09-30c"></script>
 </body>
 </html>

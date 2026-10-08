@@ -979,6 +979,17 @@ preference and a manual override (see below), with a matching blue-only dark pal
 directly by the backend at `/` (see `main.py` below), so there's no separate frontend server or
 port to keep in sync.
 
+**2026-09-25 responsive repair:** tested the page in Chromium from 280px-wide phones through
+1920px desktops, including short landscape viewports. The mobile context simulator is now a
+scrollable panel above the chat rather than a flex item that squeezes the composer off-screen;
+the history drawer starts closed on mobile and responds to viewport changes. The context gear
+remains visible at phone widths, input fields have a softer inset edge, the composer placeholder
+fits narrow screens, and message-footer controls wrap within their bubble. Empty chats now start
+at the top of the welcome content rather than auto-scrolling past its heading on narrow phones.
+Short desktop-height layouts cap the context panel and allow page scrolling when necessary. Re-run
+`python -m scripts.check_responsive_layout` for the 12-viewport geometry check and temporary
+screenshots; the script does not modify conversation data.
+
 **2026-09-24 second refresh — new features**: a manual light/dark theme toggle button in the header
 (🌙/☀️, persisted in `localStorage` under `ptc_theme`, overrides the OS preference via a
 `data-theme` attribute on `<html>`); a 📋 copy-to-clipboard button on every bot answer; the message
