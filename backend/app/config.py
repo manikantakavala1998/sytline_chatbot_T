@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     postgres_password: str = "ptc_local_dev"
     # How many earlier question/answer pairs the bot reads to understand a follow-up.
     history_turns_for_context: int = 3
+    # One OpenAI call understands AND classifies the message (saves the separate classifier call,
+    # ~1.5 s per question). If the combined reply has no valid classification, the separate call
+    # still runs, so nothing is lost. Set COMBINED_UNDERSTANDING=false to go back to two calls.
+    combined_understanding: bool = True
+    # Database connections shared by all parallel requests (Postgres allows 100 by default).
+    postgres_pool_max_size: int = 20
 
 
 try:

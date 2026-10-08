@@ -41,6 +41,34 @@ _SYTELINE_TERMS = {
     "site",
     "configuration",
     "permission",
+    # Prospect-to-Cash terms the glossary doesn't list yet. Without them "What is a credit memo?"
+    # went to the LLM scope check, which said in scope / general knowledge about half the time each.
+    # Only clearly ERP terms: general words (tax, return, discount) would pull in off-topic questions.
+    "credit memo",
+    "credit note",
+    "debit memo",
+    "write-off",
+    "write off",
+    "price book",
+    "price list",
+    "price code",
+    "ship-to",
+    "bill-to",
+    "rma",
+    "customer return",
+    "packing slip",
+    "pick list",
+    "bill of lading",
+    "payment terms",
+    "salesperson",
+    "sales contact",
+    "order entry",
+    "backorder",
+    "unit price",
+    "unapplied",
+    "aging report",
+    "accounts receivable",
+    "a/r",
 }
 _COMPETITORS = re.compile(r"\b(?:sap|oracle ebs|oracle erp|netsuite|dynamics 365|epicor|odoo)\b", re.IGNORECASE)
 _GENERAL = re.compile(
@@ -89,7 +117,11 @@ def _llm_scope(query: str, context: RequestContext) -> ScopeResult:
                     "Classify whether a user message belongs to a SyteLine/Infor CSI "
                     "Prospect-to-Cash assistant. Return JSON only with label, confidence, reason. "
                     f"Labels: {labels}. Greetings and conversational thanks are SYTELINE_RELATED "
-                    "because they are part of an assistant conversation. Do not answer the question."
+                    "because they are part of an assistant conversation. Sales, ordering, shipping, "
+                    "invoicing, credit, pricing, payment and accounting terms (credit memo, write-off, "
+                    "price book, payment terms...) are SYTELINE_RELATED: users ask what they mean in "
+                    "SyteLine. Use GENERAL_KNOWLEDGE only for topics with no link to running a business "
+                    "in an ERP (weather, sport, news, cooking). Do not answer the question."
                 ),
             },
             {

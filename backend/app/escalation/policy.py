@@ -55,6 +55,21 @@ def is_ticket_request(text: str) -> bool:
     return bool(_TICKET_REQUEST.search(text)) and not _HOW_TO.match(text)
 
 
+# Turns that say nothing about the problem itself: the request for a person, greetings, thanks.
+NOT_THE_ISSUE_ROUTES = {"DIRECT_RESPONSE"}
+
+
+def main_issue(turns: list[dict]) -> dict | None:
+    """The turn that describes the user's actual problem: the latest question that is not the
+    request for a ticket or small talk. "How do I reprint an invoice?" followed by "can I talk to
+    support?" → the reprint question. Falls back to the latest turn."""
+    for turn in reversed(turns):
+        question = turn.get("question") or ""
+        if turn.get("outcome") not in NOT_THE_ISSUE_ROUTES and not is_ticket_request(question):
+            return turn
+    return turns[-1] if turns else None
+
+
 @dataclass
 class EscalationDecision:
     state: EscalationState = EscalationState.NONE

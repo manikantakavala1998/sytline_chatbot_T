@@ -160,6 +160,25 @@ def _enum_values(enum_type: type) -> str:
     return ", ".join(item.value for item in enum_type)
 
 
+# The routing rules, shared by the separate classifier call and the combined understanding call
+# (conversation.py, COMBINED_UNDERSTANDING), so both classify by exactly the same rules.
+CLASSIFIER_RULES = (
+    f"Intent values: {_enum_values(IntentLabel)}. "
+    f"Complexity values: {_enum_values(ComplexityLabel)}. "
+    f"Emotion values: {_enum_values(EmotionLabel)}. "
+    f"Route values: {_enum_values(RouteLabel)}. "
+    f"tool_candidate must be null or one of: {', '.join(sorted(APPROVED_TOOL_CANDIDATES))}. "
+    "Use FAST_QA only for simple definitions. Use MARKDOWN_RAG for screens, fields, processes, "
+    "and troubleshooting. Current balances/status/open records are LIVE_DATA. Open/go-to is "
+    "NAVIGATION. A request for the assistant to perform a write/release/approve/post is ACTION; "
+    "a question about HOW to do it (\"how do I / how to / steps to create a quote\") is "
+    "HELP_PROCESS, and a problem the user wants help fixing (\"order blocked by credit, "
+    "fix?\", \"why can't I ...\") is TROUBLESHOOTING. Never invent a tool name. Keep "
+    "reasoning_summary under 12 words."
+)
+COMBINED_MARK = "combined: "  # reasoning_summary prefix: classified inside the understanding call
+
+
 def _llm_classification(
     transformed: QueryTransformResult,
     context: RequestContext,
@@ -176,18 +195,7 @@ def _llm_classification(
                     "You classify and route safe, in-scope SyteLine/Infor CSI requests. Do not answer them. "
                     "Return one JSON object with: intent, sub_intent, module, form, field, entity, operation, "
                     "complexity, emotion, route, tool_candidate, confidence, reasoning_summary. "
-                    f"Intent values: {_enum_values(IntentLabel)}. "
-                    f"Complexity values: {_enum_values(ComplexityLabel)}. "
-                    f"Emotion values: {_enum_values(EmotionLabel)}. "
-                    f"Route values: {_enum_values(RouteLabel)}. "
-                    f"tool_candidate must be null or one of: {', '.join(sorted(APPROVED_TOOL_CANDIDATES))}. "
-                    "Use FAST_QA only for simple definitions. Use MARKDOWN_RAG for screens, fields, processes, "
-                    "and troubleshooting. Current balances/status/open records are LIVE_DATA. Open/go-to is "
-                    "NAVIGATION. A request for the assistant to perform a write/release/approve/post is ACTION; "
-                    "a question about HOW to do it (\"how do I / how to / steps to create a quote\") is "
-                    "HELP_PROCESS, and a problem the user wants help fixing (\"order blocked by credit, "
-                    "fix?\", \"why can't I ...\") is TROUBLESHOOTING. Never invent a tool name. Keep "
-                    "reasoning_summary under 12 words."
+                    + CLASSIFIER_RULES
                 ),
             },
             {
@@ -260,15 +268,72 @@ def _enforce_route_policy(classification: QueryClassification, query: str = "") 
     return classification
 
 
+def classifier_source(classification: QueryClassification) -> str:
+    """rules (LLM unavailable) | combined (inside the understanding call) | llm (separate call)."""
+    if classification.reasoning_summary == "deterministic_fallback":
+        return "rules"
+    return "combined" if classification.reasoning_summary.startswith(COMBINED_MARK) else "llm"
+
+
+# A message that starts like an instruction to the assistant ("Create a customer order for ...",
+# "Open the customer orders form", "please show my open orders"). Measured: the combined call read
+# two of these as how-to questions; the separate classifier read them correctly.
+_COMMAND = re.compile(
+    r"^\s*(?:(?:please|pls|kindly|can you|could you|would you)\s+)*"
+    r"(?:create|add|update|change|delete|remove|release|approve|post|cancel|enter|book|"
+    r"open|go to|navigate|take me|show|list|get|display|give me|pull up|bring up|check)\b",
+    re.IGNORECASE,
+)
+_COMMAND_INTENTS = {IntentLabel.ACTION, IntentLabel.NAVIGATION, IntentLabel.LIVE_DATA}
+
+
+def _from_understanding(
+    payload: dict | None,
+    transformed: QueryTransformResult,
+    context: RequestContext,
+) -> QueryClassification | None:
+    """The classification the understanding call returned (COMBINED_UNDERSTANDING). None when it is
+    missing, invalid, or reads a command as a question — the caller then makes the separate
+    classifier call, exactly as before, so nothing is lost."""
+    if not isinstance(payload, dict) or not payload.get("intent") or not payload.get("route"):
+        return None
+    try:
+        classification = QueryClassification.model_validate(payload)
+    except ValueError:
+        logger.warning("event=combined_classification_invalid request_id=%s", context.request_id)
+        return None
+    if _COMMAND.match(transformed.rewritten_query) and classification.intent not in _COMMAND_INTENTS:
+        log_event(logger, "combined_classification_rechecked", request_id=context.request_id,
+                  intent=classification.intent.value, reason="reads_like_a_command")
+        return None
+    if classification.tool_candidate not in APPROVED_TOOL_CANDIDATES:
+        classification.tool_candidate = None
+    # Screen context comes from SyteLine, never from the model; split questions are multi-part
+    # (the separate call saw the split result, the combined call sees the message before it).
+    classification.module = classification.module or context.ui.module
+    classification.form = classification.form or context.ui.form
+    classification.field = classification.field or context.ui.field
+    if transformed.subqueries:
+        classification.complexity = ComplexityLabel.MULTI_PART
+    classification.reasoning_summary = COMBINED_MARK + (classification.reasoning_summary or "")
+    return classification
+
+
 def classify_and_route(
     transformed: QueryTransformResult,
     context: RequestContext,
+    precomputed: dict | None = None,
 ) -> QueryClassification:
+    """`precomputed`: the classification already returned by the understanding call
+    (COMBINED_UNDERSTANDING). Used when valid; otherwise the separate classifier call runs."""
     fallback = _heuristic_classification(transformed, context)
+    combined = _from_understanding(precomputed, transformed, context) if precomputed else None
 
     # Trivial conversation does not need a paid classifier call.
     if fallback.intent in {IntentLabel.GREETING, IntentLabel.CHITCHAT}:
         result = fallback
+    elif combined is not None:
+        result = combined
     elif settings.orchestrator_llm_enabled:
         try:
             result = _llm_classification(transformed, context)
@@ -288,6 +353,6 @@ def classify_and_route(
         emotion=result.emotion.value,
         route=result.route.value,
         confidence=round(result.confidence, 3),
-        classifier="llm" if result.reasoning_summary != "deterministic_fallback" else "fallback",
+        classifier=classifier_source(result),
     )
     return result

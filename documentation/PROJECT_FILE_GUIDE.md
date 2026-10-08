@@ -97,6 +97,11 @@ before the graph and saves the question + answer after it, returning `message_id
 The graph owns security, scope, ambiguity, transformation, classification,
 route selection, Fast Q&A, and Markdown RAG execution. Each important transition is logged as a
 named event tied to the request ID, without writing the raw question or answer into logs.
+**2026-09-30 — parallel users**: `/chat` is a plain `def` (was `async def`), so FastAPI runs each
+question on its worker threads (40 by default) instead of on the single event loop. Measured before:
+6 users at once all waited 47 s and even `/health` froze for 46 s; after: 12 users at once all
+answered within 17 s, `/health` stayed instant, 0 errors, no mixed sessions. The Postgres pool
+(`history/store.py`) grew from 5 to `POSTGRES_POOL_MAX_SIZE` (20) connections.
 
 ### `security/permission_seam.py` — retired in Phase 2
 Was a stand-in permission check that always said "allowed". Removed once
@@ -218,12 +223,27 @@ The generated starter rows use a placeholder `PTC Training Guide` source. The lo
 that source even though older workbook copies carry an APPROVED flag; newly generated samples use
 DRAFT. Review and replace them with real sourced Q&A before enabling Fast Q&A content.
 
+**Status discrepancy to resolve separately:** A read-only test of existing Prospect,
+Customer, Customer Orders, Customer Order Lines, and Pricing workbooks during the Credit
+pass found `APPROVED`/active entries, although the earlier entries above describe an
+intended `IN_REVIEW`/inactive state. This Credit update did not change those workbooks.
+
 ### `scripts/generate_sample_qa.py`
 **What it is**: the generator that writes the files above. Re-run it any time to regenerate all
 14 files from the `LEVELS` dict inside it (it overwrites them). Add more dummy/starter rows here,
 or edit the `.xlsx` files directly once real content replaces the placeholders. Generated starter
 rows now carry DRAFT approval status. **Superseded (2026-09-24)** by `build_qa_from_knowledge.py`
 below; kept only because that script reuses its column definitions.
+
+### `scripts/eval_understanding.py` (added 2026-10-08)
+**What it is**: the before / after check for `COMBINED_UNDERSTANDING`. Runs the real chat workflow in its
+own process (real OpenAI, Milvus and models — the running server is untouched) over 53 questions plus
+3 follow-ups — knowledge questions, slang and typos, other languages, screen context, two-part
+questions, frustration, live data / actions / navigation, small talk, ticket requests, off-topic,
+unclear questions and attacks — once with the switch off and once on, and prints where each question
+ended up (and whether that is right), the time, the OpenAI calls and the cost, plus every question
+whose result differs between the two modes. `python -m scripts.eval_understanding [--only on|off]
+[--out results.json]`; about $0.01 per question per mode.
 
 ### `scripts/validate_knowledge_data.py` (added 2026-09-29)
 **What it is**: the data team's checker — `python -m scripts.validate_knowledge_data <files or
@@ -244,6 +264,15 @@ grouped into one line.
 Markdown file the chatbot loads — Heading 1/2/3 → `#/##/###`, numbered/bullet lists, bold
 `Label:` lines, tables; grey "Note:" writer guidance removed. Checked by a round-trip test: the
 Word template converts to exactly the same 14 sections as the Markdown template.
+
+### `scripts/build_permission_search_doc.py` → `documentation/Permission_Aware_Knowledge_Search.docx` (added 2026-09-30)
+**What it is**: the design note (6 pages, Word) on permission-aware document search: today's gap
+(search covers all documents for anyone allowed to search), the two options (one collection per
+module vs one collection with module / form / allowed-role labels and a filter), seven issues with
+per-module collections each with a SyteLine example, the measured search timings (Milvus 15 ms of
+331 ms), when separate collections are right, the recommended design and implementation steps.
+Rebuild with `python -m scripts.build_permission_search_doc`; flow diagrams are Word tables, so the
+document stays editable.
 
 ### `scripts/build_data_templates.py` (added 2026-09-29)
 **What it is**: builds `documentation/data_templates/SyteLine_QA_Template.xlsx` (README, `qa_master`,
@@ -364,6 +393,15 @@ paraphrases. How the orchestrator uses this to pick verbatim Excel vs a generate
 `ARCHITECTURE_DECISIONS.md` decision #9.
 
 ### `answer_service.py`
+**2026-10-08 — answer length**: simple definition questions ("what is customer", "What does CO mean?",
+"define prospect") get `brief=True`, which adds `BRIEF_INSTRUCTION` (one or two sentences, about 40
+words, what it is and the form where it is kept, no steps or related processes). The decision is
+`graph.is_definition_question()`: the wording starts like a definition, or the classifier says
+`operation = definition`, and the question has no how / why / difference / steps / process / what
+happens and at most 10 words. Every answer also follows a new rule: answer only what was asked, no
+related topics. Measured: "what is customer" went from ~85 words mixing prospects, credit and PO
+references to 30 words; "How do I create an invoice?" and lead-vs-opportunity still get full answers.
+
 **What it is**: calls the primary LLM to generate a grounded, cited answer from the retrieved
 chunks (master prompt §34) — a deliberately simplified version of the full answer-generation
 prompt. Role-aware tone and RBAC scope enforcement (the replica pattern's big system prompt) land
@@ -569,6 +607,17 @@ budget, so "What is a quotation and how is an invoice created?" retrieves both q
 invoice.md instead of only the dominant topic. `_normalize_chitchat_sub_intent` maps the LLM
 classifier's free-form chitchat labels (e.g. `CHECK_WELLBEING`) onto the canned replies.
 
+**2026-10-08 — `COMBINED_UNDERSTANDING`** (setting, on by default since it was measured; `COMBINED_UNDERSTANDING=false` goes back to two calls): the understanding
+call (`conversation.py`) also returns the routing `classification`, using the classifier's own rules
+(`router.CLASSIFIER_RULES`, shared so both paths classify identically) and the SyteLine screen context.
+`router.classify_and_route(..., precomputed=)` uses it when it is a valid object with an intent and a
+route; anything missing or invalid falls back to the separate classifier call, so no routing is lost.
+Code still owns the final route (`_enforce_route_policy`), unknown tool names are dropped, and the
+screen's module / form come from SyteLine, never the model. The trace and the decision trace show
+`classifier: combined | llm | rules`. Tests: `tests/test_combined_understanding.py` (12, faked OpenAI);
+before / after measurement: `scripts/eval_understanding.py`.
+A message that reads like a command ("Create a customer order…", "Open the … form", "show my open orders") but came back as a question is re-checked by the separate call (first run: the combined call read two commands as how-to questions). **Measured on 56 questions:** off 52/54 correct, on **54/54**; understand + classify 2.6 s → 1.6 s; business answers 5.9 s → 5.1 s (median); OpenAI calls per question 3.6 → 2.7; cost about the same. The same run found the scope check flipping on "What is a credit memo?" (in scope 3 of 6 times): `scope.py` now lists Prospect-to-Cash terms (credit memo, write-off, payment terms, ship-to, price book…) and tells the LLM scope check that business and accounting terms are in scope.
+
 ### `classification/conversation.py` (added 2026-09-25 — replaces `followup.py`)
 **What it is**: LLM conversation understanding, run on every message right after the security gate.
 One `gpt-4.1-mini` JSON call reads the message (plus the last 3 turns) and returns: `kind` (greeting,
@@ -652,14 +701,24 @@ shows the mailbox's own name); `SUPPORT_TICKET_EMAIL`/`TICKET_RECIPIENT_EMAIL`;
 📧 card shows the setup and has **Send test email** (`POST /api/admin/notifier/test`).
 **2026-09-30 — email design**: every mail is an Outlook-safe layout (nested tables, inline styles,
 640px wide, shrinks on phones; Outlook for Windows ignores flex/grid/CSS classes). The ticket mail
-shows: a blue header with the ticket number and priority/status badges; *what the user needs help
+shows (calm style since the 2026-09-30 redesign: white header under a thin blue line, soft tinted
+badges): the ticket number and priority/status badges; *what the user needs help
 with*; the user's note; details (who, when, SyteLine screen, record, why it was raised, mood); the
 conversation before the ticket — each question with a plain-words outcome badge ("Answered from
 documents", "Not found in documents", never `MARKDOWN_RAG_RESPONSE`) and the start of the answer;
-*what to do next*; and, when `ADMIN_CONSOLE_URL` is set, an **Open in the feedback console** button.
-Security (dark red header), health (amber / green header) and test mails use the same shell. A
+*what to do next* (the same button names as the console: Start working → Mark resolved); and, when
+`ADMIN_CONSOLE_URL` is set, an **Open in the support console** button. Security (red line), health
+(amber / green line) and test mails use the same shell. A
 plain-text copy is kept for SMTP. Working since 2026-09-30 (Graph login and a real test mail OK).
 `documentation/ticket_email_preview.png` shows the ticket mail rendered from sample data.
+**2026-10-05 — clearer ticket mail**: the title is now the user's actual problem, picked by
+`policy.main_issue()` (the latest question that isn't the request for a person or small talk — before,
+"can I talk to someone from support?" became the issue). Below it: a **Summary** panel with one plain
+sentence (why the ticket exists + how far the assistant got, e.g. "The user asked to talk to the support
+team. The assistant couldn't find this in the approved documents.") and Who / Where / Record / When; the
+user's note; **The conversation** written as a chat (User / Assistant, with an outcome tag on real answers
+only); two next steps. Mood and trigger codes are no longer listed separately. Older tickets are corrected
+when read (`store._ticket_row`), so the console and the email show the real problem for them too.
 **Tests never send real mail**: `tests/conftest.py` forces the log notifier for every test.
 
 **API** (`api/routes.py`): `/chat` returns `escalation` (`state`, `trigger`, `ticket_available`) and
@@ -717,6 +776,35 @@ per purpose/model; time per workflow step; open and recent alerts; **Run health 
 SVG with a hover tooltip on every mark, colours checked with the palette validator in light and
 dark. `feedback/insights.py` now reads 👎 answers and content gaps from the audit trail when it is
 available, so deleting a chat no longer hides them from the console.
+
+**2026-09-30 — redesigned as the "Support console"** (the user found the tab page confusing): a
+side menu (a scrolling row on phones) with **🏠 Home** first — four numbers (questions asked,
+answered %, rated helpful, open tickets) and a *Needs your attention* list that shows only what has
+work waiting, each with an **Open** button, plus a folded "How does this console work?" help. Then
+🎫 Tickets (filter Open & in progress / Resolved / Closed / All; plain buttons **Start working**,
+**Mark resolved**, **Close ticket**, **Reopen** instead of a status dropdown; the conversation and
+details fold away), ❓ Unanswered questions (**Needs a document** / **Done** / **Ignore** / **Undo**,
+download for the data team), 👎 Disliked answers, 🛡️ Security, 📈 System health (services in plain
+names, alerts, charts, answer quality, the ticket-email card; OpenAI and per-step tables folded under
+*Technical details*) and 🧾 Activity log (plain column names and results). Every internal code
+(route, mood, answer check) is shown in plain words. Same API endpoints. Details added after a test
+fill: each unanswered topic shows who asked (`users` in the gap, from `insights.group_questions`) and
+what the assistant replied (`last_answer`); each disliked answer shows the answer, its source and up
+to 4 documents it used; Security starts with a *Who was blocked* table (attempts, high risk, alerts
+per user) and shows the latest 10 attempts with a **Show all** button.
+
+**2026-09-30 — visual refinement:** the admin console now uses a blue/indigo neumorphic
+workspace with stronger heading, navigation, filter and card hierarchy. Tickets separate the
+user's note, conversation details and status actions; disliked answers display the assistant's
+response in a distinct review panel. The chat ticket prompt also has a clearer support handoff,
+labeled optional note and confirmation controls. The existing API and review actions are unchanged.
+The layout was checked at phone, tablet and desktop widths and in dark mode.
+
+`scripts/check_support_ui.py` is the repeatable visual smoke test for this UI. It exists to catch
+horizontal overflow and broken ticket-form interactions after future styling changes. Run
+`python -m scripts.check_support_ui` while the local server is on port 8001; it checks Home,
+Tickets and Disliked answers at 390/768/1366 px, dark-mode Tickets, and the chat ticket form,
+then saves screenshots under the system temporary directory without changing server data.
 
 ---
 

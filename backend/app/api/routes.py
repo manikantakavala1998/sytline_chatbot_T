@@ -62,7 +62,10 @@ async def info():
 
 
 @router.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+    # A plain `def` on purpose: FastAPI runs it on a worker thread, so questions from many users run
+    # in parallel. As `async def`, the blocking work (OpenAI, search, database) ran on the event loop
+    # and the whole server answered one question at a time (measured: 6 users → all waited 47 s).
     request_id = getattr(http_request.state, "request_id", str(uuid.uuid4()))
     run = trace.start_request(request_id)
     run.line(f"❓ NEW QUESTION  {trace.text(request.query, 400)}")
@@ -70,7 +73,7 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
              f"chat session {request.session_id or '— (not saved)'}")
     measured = usage.start()
     try:
-        response = await _answer_chat(request, request_id)
+        response = _answer_chat(request, request_id)
     except Exception as exc:
         run.line(f"⛔ FAILED after {run.elapsed():.1f}s — {type(exc).__name__}: {trace.clean(exc, 200)} "
                  "(full error in the log below)")
@@ -104,7 +107,7 @@ def _trace_final(run, result, escalation, message_id) -> None:
     run.line(f"✔ DONE in {run.elapsed():.1f}s · " + " · ".join(extras))
 
 
-async def _answer_chat(request: ChatRequest, request_id: str) -> ChatResponse:
+def _answer_chat(request: ChatRequest, request_id: str) -> ChatResponse:
     run = trace.current()
     log_event(
         logger,

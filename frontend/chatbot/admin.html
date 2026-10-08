@@ -3,145 +3,223 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Feedback Console</title>
-  <link rel="stylesheet" href="admin.css" />
+  <title>Support Console</title>
+  <link rel="stylesheet" href="admin.css?v=2026-09-30c" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <span class="brand-mark" aria-hidden="true">📊</span>
+      <span class="brand-mark" aria-hidden="true">✦</span>
       <div>
-        <h1>Feedback console</h1>
-        <p class="subtitle">SyteLine Prospect-to-Cash assistant — what users couldn’t get answered, disliked, or escalated</p>
+        <span class="eyebrow">SYTELINE / SUPPORT WORKSPACE</span>
+        <h1>Support console</h1>
+        <p class="subtitle">SyteLine Prospect-to-Cash assistant — tickets, unanswered questions and system health</p>
       </div>
     </div>
-    <a class="back-link" href="/">← Back to chat</a>
-  </header>
-
-  <section class="filters" aria-label="Filters">
-    <label>
-      <span>Signed in as (test group)</span>
-      <select id="group">
-        <option value="SUPPORT_ADMIN">SUPPORT_ADMIN</option>
-        <option value="SALES_REP">SALES_REP</option>
-        <option value="AR_CLERK">AR_CLERK</option>
-        <option value="NO_ACCESS">NO_ACCESS</option>
-      </select>
-    </label>
-    <label>
-      <span>Period</span>
-      <select id="days">
-        <option value="1">Last 24 hours</option>
-        <option value="7" selected>Last 7 days</option>
-        <option value="30">Last 30 days</option>
-        <option value="90">Last 90 days</option>
-      </select>
-    </label>
-    <label class="check">
-      <input type="checkbox" id="include-reviewed" />
-      <span>Show reviewed / dismissed items</span>
-    </label>
-    <div class="filter-actions">
-      <button type="button" id="refresh">↻ Refresh</button>
-      <a id="export" class="button-link" href="#" download>⬇ Content gaps (CSV)</a>
+    <div class="topbar-controls">
+      <label class="control">
+        <span>Period</span>
+        <select id="days">
+          <option value="1">Last 24 hours</option>
+          <option value="7" selected>Last 7 days</option>
+          <option value="30">Last 30 days</option>
+          <option value="90">Last 90 days</option>
+        </select>
+      </label>
+      <label class="control" title="Until the real SyteLine login is connected, pick the role to test with">
+        <span>Testing as</span>
+        <select id="group">
+          <option value="SUPPORT_ADMIN">Support admin</option>
+          <option value="SALES_REP">Sales rep</option>
+          <option value="AR_CLERK">AR clerk</option>
+          <option value="NO_ACCESS">No access</option>
+        </select>
+      </label>
+      <button type="button" id="refresh" class="icon-button" aria-label="Refresh">↻ Refresh</button>
+      <a class="back-link" href="/">← Back to chat</a>
     </div>
-  </section>
+  </header>
 
   <div id="message" class="notice" role="status" hidden></div>
 
-  <main id="console" hidden>
-    <section class="tiles" id="tiles" aria-label="Summary"></section>
-
-    <section class="breakdowns" aria-label="Breakdowns">
-      <div class="card">
-        <h2>Answer check</h2>
-        <p class="hint">How generated answers did against the documents (Phase 5 step 1).</p>
-        <table class="mini" id="validation-table"></table>
-      </div>
-      <div class="card">
-        <h2>User mood</h2>
-        <p class="hint">Detected tone of the questions (F0 normal → F4 repeated problem).</p>
-        <table class="mini" id="mood-table"></table>
-      </div>
-      <div class="card">
-        <h2>Outcomes</h2>
-        <p class="hint">Where each question ended up.</p>
-        <table class="mini" id="route-table"></table>
-      </div>
-    </section>
-
-    <section class="card mail-card" aria-label="Ticket email">
-      <div class="item-head">
-        <div>
-          <h2>📧 Ticket email (Outlook)</h2>
-          <p class="hint" id="mail-summary"></p>
-        </div>
-        <div class="actions">
-          <button type="button" id="mail-test">Send test email</button>
-          <span class="done" id="mail-test-result" role="status"></span>
-        </div>
-      </div>
-    </section>
-
-    <nav class="tabs" role="tablist" aria-label="Work queues">
-      <button type="button" role="tab" class="tab active" data-tab="gaps" aria-selected="true">📝 Content gaps <span class="count" id="count-gaps"></span></button>
-      <button type="button" role="tab" class="tab" data-tab="downvoted" aria-selected="false">👎 Disliked answers <span class="count" id="count-downvoted"></span></button>
-      <button type="button" role="tab" class="tab" data-tab="tickets" aria-selected="false">🎫 Tickets <span class="count" id="count-tickets"></span></button>
-      <button type="button" role="tab" class="tab" data-tab="security" aria-selected="false">🛡️ Security <span class="count" id="count-security"></span></button>
-      <button type="button" role="tab" class="tab" data-tab="health" aria-selected="false">📈 Health <span class="count" id="count-health"></span></button>
-      <button type="button" role="tab" class="tab" data-tab="audit" aria-selected="false">🧾 Audit</button>
+  <div class="shell" id="console" hidden>
+    <nav class="sidenav" aria-label="Sections">
+      <span class="nav-heading">WORKSPACE</span>
+      <button type="button" class="nav-item active" data-view="home"><span aria-hidden="true">🏠</span> Home</button>
+      <button type="button" class="nav-item" data-view="tickets"><span aria-hidden="true">🎫</span> Tickets <span class="nav-count" id="nav-tickets"></span></button>
+      <button type="button" class="nav-item" data-view="gaps"><span aria-hidden="true">❓</span> Unanswered questions <span class="nav-count" id="nav-gaps"></span></button>
+      <button type="button" class="nav-item" data-view="disliked"><span aria-hidden="true">👎</span> Disliked answers <span class="nav-count" id="nav-disliked"></span></button>
+      <button type="button" class="nav-item" data-view="security"><span aria-hidden="true">🛡️</span> Security <span class="nav-count" id="nav-security"></span></button>
+      <button type="button" class="nav-item" data-view="health"><span aria-hidden="true">📈</span> System health <span class="nav-count" id="nav-health"></span></button>
+      <button type="button" class="nav-item" data-view="audit"><span aria-hidden="true">🧾</span> Activity log</button>
     </nav>
 
-    <section class="panel" id="panel-gaps" role="tabpanel"></section>
-    <section class="panel" id="panel-downvoted" role="tabpanel" hidden></section>
-    <section class="panel" id="panel-tickets" role="tabpanel" hidden></section>
-    <section class="panel" id="panel-security" role="tabpanel" hidden></section>
-    <section class="panel" id="panel-health" role="tabpanel" hidden>
-      <div class="item-head">
-        <p class="hint" id="health-updated">Loading health…</p>
-        <div class="actions">
-          <button type="button" id="health-check">Run health check now</button>
-          <span class="done" id="health-check-result" role="status"></span>
+    <main class="content">
+      <!-- Home -->
+      <section class="view" id="view-home">
+        <div class="view-head">
+          <h2>Home</h2>
+          <p class="lead">What needs your attention, and how the assistant is doing.</p>
         </div>
-      </div>
-      <div class="services" id="health-services"></div>
-      <div class="tiles" id="health-tiles"></div>
-      <div class="charts">
-        <figure class="card chart-card"><figcaption>Questions per day</figcaption><div id="chart-requests"></div></figure>
-        <figure class="card chart-card"><figcaption>Response time per day — 95% of answers faster than</figcaption><div id="chart-latency"></div></figure>
-        <figure class="card chart-card"><figcaption>OpenAI cost per day (USD)</figcaption><div id="chart-cost"></div></figure>
-        <figure class="card chart-card"><figcaption>Answer check per day</figcaption><div id="chart-check"></div></figure>
-      </div>
-      <div class="breakdowns">
-        <div class="card"><h2>OpenAI calls</h2><p class="hint">Per purpose and model, for the selected period.</p><table class="mini wide" id="health-llm"></table></div>
-        <div class="card"><h2>Time per step</h2><p class="hint">Average and slowest time of each workflow step.</p><table class="mini wide" id="health-stages"></table></div>
-      </div>
-      <div class="card"><h2>Alerts</h2><p class="hint" id="health-thresholds"></p><div id="health-alerts"></div></div>
-    </section>
-    <section class="panel" id="panel-audit" role="tabpanel" hidden>
-      <p class="hint">Every question and admin action is recorded here permanently (it can't be edited or deleted, and
-        deleting a chat doesn't remove it). Questions and answers are shown with secrets masked.</p>
-      <form class="filters audit-filters" id="audit-form">
-        <label><span>User id</span><input type="text" id="audit-user" maxlength="120" placeholder="e.g. demo.sales_rep" /></label>
-        <label><span>What</span>
-          <select id="audit-type">
-            <option value="">Everything</option><option value="chat" selected>Questions</option>
-            <option value="rating">Ratings</option><option value="ticket_created">Tickets created</option>
-            <option value="ticket_status">Ticket status changes</option><option value="feedback_review">Feedback reviews</option>
-            <option value="admin_access">Admin console access</option><option value="chat_deleted">Chats deleted</option>
-          </select></label>
-        <label><span>Status</span>
-          <select id="audit-status">
-            <option value="">Any</option><option>SUCCESS</option><option>NO_ANSWER</option><option>CLARIFY</option>
-            <option>BLOCKED</option><option>ERROR</option><option>OUT_OF_SCOPE</option><option>NOT_AVAILABLE</option>
-          </select></label>
-        <label><span>Request id</span><input type="text" id="audit-request" maxlength="80" /></label>
-        <div class="filter-actions"><button type="submit" class="primary">Search</button></div>
-      </form>
-      <div id="audit-results"></div>
-    </section>
-  </main>
+        <div class="stats" id="home-stats"></div>
+        <div class="card">
+          <h3>Needs your attention</h3>
+          <div id="home-todo" class="todo-list"></div>
+        </div>
+        <details class="card help">
+          <summary>How does this console work?</summary>
+          <ul>
+            <li><b>Tickets</b> — a user asked the assistant for help from a person and confirmed it. Contact them, then press <i>Start working</i> and later <i>Mark resolved</i>.</li>
+            <li><b>Unanswered questions</b> — things users asked that the documents don't cover. Press <i>Needs a document</i> so the data team writes it (download the list for them).</li>
+            <li><b>Disliked answers</b> — answers users rated 👎. Check the answer; if a document is wrong, press <i>Needs a document</i>.</li>
+            <li><b>Security</b> — attempts the assistant blocked (for example asking for passwords). Nothing to do unless one person repeats it.</li>
+            <li><b>System health</b> and <b>Activity log</b> — for IT: speed, errors, cost and a permanent record of every question.</li>
+          </ul>
+        </details>
+      </section>
 
-  <script src="admin.js"></script>
+      <!-- Tickets -->
+      <section class="view" id="view-tickets" hidden>
+        <div class="view-head">
+          <h2>Tickets</h2>
+          <p class="lead">Users who asked for help from a person. Contact the user, then move the ticket along.</p>
+        </div>
+        <div class="chips" role="group" aria-label="Show tickets" id="ticket-filter">
+          <button type="button" class="chip active" data-status="active">Open &amp; in progress</button>
+          <button type="button" class="chip" data-status="resolved">Resolved</button>
+          <button type="button" class="chip" data-status="closed">Closed</button>
+          <button type="button" class="chip" data-status="all">All</button>
+        </div>
+        <div id="ticket-list" class="list"></div>
+      </section>
+
+      <!-- Unanswered questions -->
+      <section class="view" id="view-gaps" hidden>
+        <div class="view-head row">
+          <div>
+            <h2>Unanswered questions</h2>
+            <p class="lead">Questions the documents don't answer yet, grouped by topic, most asked first.</p>
+          </div>
+          <a id="export" class="button" href="#" download>⬇ Download list for the data team</a>
+        </div>
+        <label class="toggle"><input type="checkbox" class="show-done" /> Show items already handled</label>
+        <div id="gap-list" class="list"></div>
+      </section>
+
+      <!-- Disliked answers -->
+      <section class="view" id="view-disliked" hidden>
+        <div class="view-head">
+          <h2>Disliked answers</h2>
+          <p class="lead">Answers users rated 👎, newest first. Read the answer and decide if a document needs fixing.</p>
+        </div>
+        <label class="toggle"><input type="checkbox" class="show-done" /> Show items already handled</label>
+        <div id="disliked-list" class="list"></div>
+      </section>
+
+      <!-- Security -->
+      <section class="view" id="view-security" hidden>
+        <div class="view-head">
+          <h2>Security</h2>
+          <p class="lead">Messages the assistant blocked. Nothing was revealed. Look closer only when one person keeps trying.</p>
+        </div>
+        <div id="security-list" class="list"></div>
+      </section>
+
+      <!-- System health -->
+      <section class="view" id="view-health" hidden>
+        <div class="view-head row">
+          <div>
+            <h2>System health</h2>
+            <p class="lead" id="health-updated">Loading…</p>
+          </div>
+          <div class="actions">
+            <button type="button" id="health-check">Check now</button>
+            <span class="muted" id="health-check-result" role="status"></span>
+          </div>
+        </div>
+        <div class="card">
+          <h3>Services</h3>
+          <div class="services" id="health-services"></div>
+        </div>
+        <div class="stats" id="health-stats"></div>
+        <div class="card">
+          <h3>Alerts</h3>
+          <p class="muted" id="health-thresholds"></p>
+          <div id="health-alerts"></div>
+        </div>
+        <div class="charts">
+          <figure class="card chart-card"><figcaption>Questions per day</figcaption><div id="chart-requests"></div></figure>
+          <figure class="card chart-card"><figcaption>Response time per day (seconds)</figcaption><div id="chart-latency"></div></figure>
+          <figure class="card chart-card"><figcaption>OpenAI cost per day (USD)</figcaption><div id="chart-cost"></div></figure>
+          <figure class="card chart-card"><figcaption>Answer check per day</figcaption><div id="chart-check"></div></figure>
+        </div>
+        <div class="card">
+          <h3>Answer quality</h3>
+          <div class="breakdowns">
+            <div><h4>Where questions ended up</h4><table class="mini" id="route-table"></table></div>
+            <div><h4>Answer check against the documents</h4><table class="mini" id="validation-table"></table></div>
+            <div><h4>User mood</h4><table class="mini" id="mood-table"></table></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="row">
+            <div>
+              <h3>Ticket email (Outlook)</h3>
+              <p class="muted" id="mail-summary"></p>
+            </div>
+            <div class="actions">
+              <button type="button" id="mail-test">Send test email</button>
+              <span class="muted" id="mail-test-result" role="status"></span>
+            </div>
+          </div>
+        </div>
+        <details class="card">
+          <summary>Technical details — OpenAI calls and time per step</summary>
+          <h4>OpenAI calls</h4>
+          <div class="scroll"><table class="mini wide" id="health-llm"></table></div>
+          <h4>Time per workflow step</h4>
+          <div class="scroll"><table class="mini wide" id="health-stages"></table></div>
+        </details>
+      </section>
+
+      <!-- Activity log -->
+      <section class="view" id="view-audit" hidden>
+        <div class="view-head">
+          <h2>Activity log</h2>
+          <p class="lead">A permanent record of every question and admin action. It can't be edited or deleted; secrets are masked.</p>
+        </div>
+        <form class="card filters" id="audit-form">
+          <label class="control"><span>User</span><input type="text" id="audit-user" maxlength="120" placeholder="e.g. demo.sales_rep" /></label>
+          <label class="control"><span>Show</span>
+            <select id="audit-type">
+              <option value="chat" selected>Questions</option>
+              <option value="">Everything</option>
+              <option value="ticket_created">Tickets created</option>
+              <option value="ticket_status">Ticket status changes</option>
+              <option value="rating">Ratings (👍 / 👎)</option>
+              <option value="feedback_review">Reviews in this console</option>
+              <option value="admin_access">Console visits</option>
+              <option value="chat_deleted">Chats deleted</option>
+            </select></label>
+          <label class="control"><span>Result</span>
+            <select id="audit-status">
+              <option value="">Any</option>
+              <option value="SUCCESS">Answered</option>
+              <option value="NO_ANSWER">Not answered</option>
+              <option value="CLARIFY">Asked to clarify</option>
+              <option value="OUT_OF_SCOPE">Off-topic</option>
+              <option value="NOT_AVAILABLE">Needs live data</option>
+              <option value="BLOCKED">Blocked</option>
+              <option value="ERROR">Error</option>
+            </select></label>
+          <label class="control"><span>Request id</span><input type="text" id="audit-request" maxlength="80" /></label>
+          <button type="submit" class="primary">Search</button>
+        </form>
+        <div id="audit-results"></div>
+      </section>
+    </main>
+  </div>
+
+  <script src="admin.js?v=2026-09-30c"></script>
 </body>
 </html>

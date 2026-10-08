@@ -30,6 +30,7 @@ from enum import Enum
 from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from backend.app.classification.router import CLASSIFIER_RULES
 from backend.app.classification.small_talk import chitchat_kind, clean, parse_greeting, strip_leading_greeting
 from backend.app.classification.taxonomy import EmotionLabel
 from backend.app.config import settings
@@ -82,6 +83,9 @@ class ConversationAnalysis(BaseModel):
     # The user's mood from their raw words and the conversation (Phase 5 tone manager).
     mood: EmotionLabel = EmotionLabel.NORMAL
     source: str = "llm"  # llm | rules | cache
+    # COMBINED_UNDERSTANDING: the routing classification from the same call (router.py reads it);
+    # None when the switch is off, for small talk, or when the model left it out.
+    classification: dict | None = None
 
     @field_validator("mood", mode="before")
     @classmethod
@@ -171,6 +175,17 @@ Rules:
 - "kind": "business" whenever "question" is not null (even if the message also greets);
   otherwise the best small-talk kind; a greeting word wins ("hi, how are you" -> greeting)."""
 
+# COMBINED_UNDERSTANDING: the same call also classifies and routes the business question, with the
+# classifier's own rules (router.CLASSIFIER_RULES), saving the separate classifier call (~1.5 s).
+COMBINED_PROMPT = PROMPT + f"""
+
+Also return "classification" in the same JSON object: null when "question" is null; otherwise an
+object that classifies and routes the business question (the cleaned "question", read with the
+screen context below), WITHOUT answering it:
+{{"intent", "sub_intent", "entity", "operation", "complexity", "route", "tool_candidate",
+  "confidence", "reasoning_summary"}}.
+{CLASSIFIER_RULES}"""
+
 _client: OpenAI | None = None
 _cache: "OrderedDict[str, ConversationAnalysis]" = OrderedDict()
 
@@ -228,18 +243,30 @@ def _phrase_is_grounded(phrase, query: str, question: str | None) -> bool:
     return len(phrase_tokens & question_tokens) / len(phrase_tokens) < 0.6
 
 
-def _llm_analysis(query: str, history: list[Turn]) -> ConversationAnalysis:
+def _screen_text(screen: dict | None) -> str:
+    parts = [f"{k}={v}" for k, v in (screen or {}).items() if v not in (None, "", False)]
+    return f"SCREEN CONTEXT: {', '.join(parts)}\n\n" if parts else ""
+
+
+def _llm_analysis(query: str, history: list[Turn], screen: dict | None = None) -> ConversationAnalysis:
+    combined = settings.combined_understanding
     content = f"LATEST MESSAGE:\n{query}"
     if history:
         content = f"CONVERSATION SO FAR:\n{_conversation_text(history)}\n\n{content}"
+    if combined:
+        content = _screen_text(screen) + content
     response = metered_create("understanding", _get_client(),
         model=settings.orchestrator_model,
         temperature=0,
-        max_tokens=280,
+        max_tokens=560 if combined else 280,
         response_format={"type": "json_object"},
-        messages=[{"role": "system", "content": PROMPT}, {"role": "user", "content": content}],
+        messages=[{"role": "system", "content": COMBINED_PROMPT if combined else PROMPT},
+                  {"role": "user", "content": content}],
     )
     payload = json.loads(response.choices[0].message.content or "{}")
+    classification = payload.pop("classification", None)
+    if not combined:
+        classification = None  # only trusted when this call was asked for it
     phrase = payload.pop("wellbeing_phrase", None)
     analysis = ConversationAnalysis.model_validate(payload)
     analysis.asked_wellbeing = _phrase_is_grounded(phrase, query, analysis.question) or bool(
@@ -253,10 +280,15 @@ def _llm_analysis(query: str, history: list[Turn]) -> ConversationAnalysis:
         analysis.kind = MessageKind.BUSINESS
     if analysis.kind == MessageKind.CASUAL_CHECKIN and analysis.asked_wellbeing:
         analysis.kind = MessageKind.WELLBEING  # "how's your day going" deserves "I'm doing well"
+    if analysis.question and isinstance(classification, dict):
+        analysis.classification = classification
     return analysis
 
 
-def analyze_message(query: str, history: list[Turn], request_id: str) -> ConversationAnalysis:
+def analyze_message(query: str, history: list[Turn], request_id: str,
+                    screen: dict | None = None) -> ConversationAnalysis:
+    """`screen`: module / form / field / record type of the SyteLine screen — used only when
+    COMBINED_UNDERSTANDING also classifies the question in this call."""
     cache_key = clean(query).casefold()
     if not history and cache_key in _cache:
         _cache.move_to_end(cache_key)
@@ -265,7 +297,7 @@ def analyze_message(query: str, history: list[Turn], request_id: str) -> Convers
         analysis = _rules_analysis(query)
     else:
         try:
-            analysis = _llm_analysis(query, history)
+            analysis = _llm_analysis(query, history, screen)
         except (ValidationError, ValueError, json.JSONDecodeError):
             logger.exception("event=conversation_analysis_invalid request_id=%s", request_id)
             analysis = _rules_analysis(query)

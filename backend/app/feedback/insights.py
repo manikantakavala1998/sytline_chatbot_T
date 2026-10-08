@@ -193,7 +193,8 @@ def group_questions(items: list[dict]) -> list[dict]:
                 break
         if target is None:
             target = {"_tokens": set(tokens), "topic": text, "count": 0, "examples": [], "message_ids": [],
-                      "users": set(), "last_asked": item["created_at"], "statuses": set()}
+                      "users": set(), "last_asked": item["created_at"], "statuses": set(),
+                      "last_answer": item.get("answer") or ""}  # what the assistant told the user
             groups.append(target)
         target["count"] += 1
         target["message_ids"].append(item["message_id"])
@@ -205,7 +206,9 @@ def group_questions(items: list[dict]) -> list[dict]:
     for group in groups:
         statuses = group.pop("statuses")
         group.pop("_tokens")
-        group["user_count"] = len(group.pop("users"))
+        users = group.pop("users")
+        group["user_count"] = len(users)
+        group["users"] = sorted(u for u in users if u)[:10]
         group["review_status"] = "content_gap" if "content_gap" in statuses else (
             None if None in statuses else sorted(s for s in statuses if s)[0])
         result.append(group)

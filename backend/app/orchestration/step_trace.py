@@ -99,7 +99,10 @@ def _transform(state, update):
 
 def _classification(state, update):
     c = update["classification"]
-    source = "rules (LLM unavailable)" if c.reasoning_summary == "deterministic_fallback" else "LLM"
+    from backend.app.classification.router import classifier_source  # late: avoids an import cycle
+
+    source = {"rules": "rules (LLM unavailable)", "combined": "LLM (in the understanding call — no extra call)",
+              "llm": "LLM"}[classifier_source(c)]
     trace.detail(f"intent {c.intent.value}{' / ' + c.sub_intent if c.sub_intent else ''} · complexity "
                  f"{c.complexity.value} · mood {c.emotion.value} · operation {c.operation} · by {source} "
                  f"(confidence {c.confidence:.2f})")

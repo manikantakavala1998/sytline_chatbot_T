@@ -201,3 +201,52 @@ def test_trace_marks_normal_questions_as_no_escalation():
 
 def test_graph_uses_the_shared_tone_module():
     assert graph.apply_tone is tone.apply_tone
+
+
+# ── Answer length: simple definition questions get a short answer ─────────
+
+import pytest  # noqa: E402
+
+from backend.app.orchestration.graph import is_definition_question  # noqa: E402
+
+
+@pytest.mark.parametrize("question", [
+    "What is customer?", "what is a customer", "What's a credit hold?", "Define prospect",
+    "What does CO mean?", "meaning of credit memo", "What are price codes?",
+])
+def test_simple_definition_questions_get_a_short_answer(question):
+    assert is_definition_question(question)
+
+
+@pytest.mark.parametrize("question", [
+    "How do I create a customer?", "What is the difference between a lead and an opportunity?",
+    "What happens when a quotation expires?", "Explain the invoice lifecycle",
+    "What is the process to release a credit hold?", "What are the steps to ship an order?",
+    "What is the Probability field on an opportunity and how is it used in the sales forecast reports?",
+])
+def test_questions_that_need_detail_are_not_cut_short(question):
+    assert not is_definition_question(question)
+
+
+def test_classifier_definition_counts_too():
+    assert is_definition_question("customer?", operation="definition")
+    assert not is_definition_question("how do customers pay?", operation="definition")
+
+
+def test_brief_instruction_reaches_the_answer_prompt(monkeypatch):
+    captured = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return type("R", (), {"choices": [type("C", (), {"message": type("M", (), {"content": "a"})()})()]})()
+
+    class FakeClient:
+        chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+    monkeypatch.setattr(answer_service, "get_client", lambda: FakeClient())
+    answer_service.generate_answer("What is customer?", [], brief=True)
+    system = captured["messages"][0]["content"]
+    assert system.startswith(answer_service.SYSTEM_PROMPT) and answer_service.BRIEF_INSTRUCTION in system
+    answer_service.generate_answer("How do I create a customer?", [])
+    assert answer_service.BRIEF_INSTRUCTION not in captured["messages"][0]["content"]

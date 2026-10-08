@@ -161,6 +161,22 @@ SLM-generates-simple-answers threshold with real evaluation data before trusting
 **Proves**: the cheaper/faster SLM path is measurably safe (schema-valid, correctly routed,
 doesn't regress security classes) before it ever controls a real request.
 
+**Plan (agreed 2026-10-08, not started)** — LLM-to-SLM distillation: OpenAI is the teacher, a small
+open model is the student; the student replaces only the understand-and-sort call. Permissions stay
+with SyteLine, answers and answer checking stay with the LLM.
+
+| Stage | Steps |
+|---|---|
+| 1. Data → `router-data-v1` | Excel wordings of the approved rows + teacher-drafted examples for every kind of message (commands, live data, small talk, off-topic, unclear, follow-ups, other languages, attacks); teacher labels each (route, intent, module, mood, clean question); duplicates and secrets removed; **label check: a second teacher pass on every example, disagreements to the reviewer**; human review; 70 / 15 / 15 train / validation / exam split |
+| 2. Training (Google Colab, free T4) | **Train 3 candidates**: Qwen2.5-0.5B-Instruct and Qwen2.5-1.5B-Instruct with SFT + LoRA, plus one small classifier (ModernBERT-base) for the labels only; checkpoints to Google Drive; model card per run (base model, dataset version, settings, scores) |
+| 3. Exam + choice | All candidates vs OpenAI on the exam set and `scripts/eval_understanding.py`: accuracy per label, valid JSON, **zero security misses**, speed; keep the best; **compress the winner (quantization, e.g. 4-bit / 8-bit)** and re-run the exam to confirm no loss → `router-v1` |
+| 4. Live (needs real users + GPU server) | Load behind a switch with OpenAI fallback (invalid output, unknown label, low confidence); shadow mode 2 weeks (logs disagreements → `router-data-v2`); 10% canary; full use; rollback to the previous version or to OpenAI at any time |
+| 5. Improvement loop (later) | Disagreements and 👎 → teacher labels → 👤 review → retrain → exam → 👤 approve deploy; nightly training needs a GPU server or a cloud GPU job (Colab can't run unattended) |
+
+Open points: Colab approval for training data (no customer data, prices or secrets in it); OpenAI terms
+check for training an internal model on its labels (legal); GPU server for serving (~8 GB GPU memory
+for 1.5B, less after compression); at today's volume the saving is ~1.5 s per question rather than cost.
+
 ---
 
 ## Phase 8 — Scale Out & Controlled Writes

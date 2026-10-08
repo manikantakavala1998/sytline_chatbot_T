@@ -19,6 +19,7 @@ from psycopg.types.json import Jsonb
 
 from backend.app.classification.taxonomy import SecurityLabel
 from backend.app.config import settings
+from backend.app.escalation.policy import is_ticket_request, main_issue
 from backend.app.history import store as history_store
 from backend.app.quality.answer_validator import SECRET_PATTERNS
 from backend.app.utils.logger import get_logger, log_event
@@ -170,8 +171,9 @@ def build_ticket_content(messages: list[dict], message_id: int | None) -> dict:
 
     last = exchanges[-1] if exchanges else None
     trace = (last[1].get("decision_trace") or {}) if last else {}
+    issue = main_issue(summary)  # the real problem, not "can I talk to support?"
     return {
-        "issue_summary": summary[-1]["question"] if summary else "User asked for help from the support team.",
+        "issue_summary": issue["question"] if issue else "User asked for help from the support team.",
         "steps_attempted": [f"{s['question']} → {s['outcome']}" for s in summary[:-1]],
         "conversation_summary": summary,
         "mood": trace.get("emotion"),
@@ -248,6 +250,11 @@ def _ticket_row(row) -> dict:
     ticket = dict(zip(keys, row))
     ticket["ticket_ref"] = _ticket_ref(ticket["ticket_id"])
     ticket["created_at"] = ticket["created_at"].isoformat()
+    # Tickets stored before main_issue() kept "can I talk to support?" as their issue: show the real one.
+    if is_ticket_request(ticket.get("issue_summary") or ""):
+        issue = main_issue(ticket.get("conversation_summary") or [])
+        if issue:
+            ticket["issue_summary"] = issue["question"]
     return ticket
 
 

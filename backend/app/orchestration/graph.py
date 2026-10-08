@@ -14,10 +14,11 @@ from backend.app.authorization.resolver import resolve_permission
 from backend.app.classification.ambiguity import GENERAL_ANSWER_REASON, resolve_ambiguity
 from backend.app.classification.conversation import MessageKind, analyze_message
 from backend.app.classification.query_transformer import expand_for_retrieval, transform_query
-from backend.app.classification.router import classify_and_route
+from backend.app.classification.router import classifier_source, classify_and_route
 from backend.app.classification.scope import classify_scope
 from backend.app.classification.small_talk import greeting_key_from_label, parse_greeting
 from backend.app.classification.taxonomy import EmotionLabel, IntentLabel, QueryClassification, RouteLabel
+from backend.app.config import settings
 from backend.app.history.store import Turn
 from backend.app.orchestration.state import ChatWorkflowState, WorkflowResult
 from backend.app.orchestration.step_trace import traced
@@ -62,6 +63,24 @@ TERMINOLOGY_MATCH_MARGIN = 0.05
 # An ERP abbreviation in the question (SO, CO, RMA, A/R, POs) — then the answer model also gets the
 # SyteLine-terms wording, because it can't expand the abbreviation itself.
 _ABBREVIATION = re.compile(r"\b(?:[A-Z]{2,5}s?|[A-Z]/[A-Z])\b")
+# A simple definition question ("what is customer", "what does CO mean") gets a one-or-two-sentence
+# answer. Questions about how, why, steps, differences or what happens are never cut short.
+_DEFINITION = re.compile(
+    r"^\s*(?:what\s+(?:is|are)|what'?s|whats|define|definition\s+of|meaning\s+of|what\s+does\s+.+\s+mean)\b",
+    re.IGNORECASE,
+)
+_NEEDS_DETAIL = re.compile(
+    r"\b(?:how|why|when|difference|differ|between|compare|vs|versus|steps?|process|lifecycle|flow|explain|"
+    r"happens?|list|all|types?|examples?)\b",
+    re.IGNORECASE,
+)
+BRIEF_MAX_WORDS = 10
+
+
+def is_definition_question(question: str, operation: str | None = None) -> bool:
+    if _NEEDS_DETAIL.search(question) or len(question.split()) > BRIEF_MAX_WORDS:
+        return False
+    return bool(_DEFINITION.match(question)) or (operation or "").strip().lower() == "definition"
 
 
 def _greet_back(state: ChatWorkflowState, answer: str | None) -> str | None:
@@ -290,9 +309,9 @@ def _decision_trace(state: ChatWorkflowState) -> dict[str, object]:
         "sub_intent": classification.sub_intent if classification else None,
         "complexity": classification.complexity.value if classification else None,
         "emotion": classification.emotion.value if classification else None,
-        # "llm" or "rules" (LLM unavailable) — the Health tab's fallback rate reads this.
-        "classifier": (None if not classification else
-                       "rules" if classification.reasoning_summary == "deterministic_fallback" else "llm"),
+        # "llm" (separate call), "combined" (inside the understanding call) or "rules" (LLM
+        # unavailable) — the Health tab's fallback rate counts "rules".
+        "classifier": classifier_source(classification) if classification else None,
         "selected_route": selected_route.value if selected_route else None,
         "tool_candidate": classification.tool_candidate if classification else None,
         "transformations": transformed.transformations if transformed else [],
@@ -394,7 +413,10 @@ class ChatOrchestrator:
     def _conversation_node(state: ChatWorkflowState) -> dict:
         # Security already checked the raw message; the LLM here only labels it and
         # rewrites references with topics from earlier turns that passed the same gate.
-        analysis = analyze_message(state["query"], state.get("history") or [], state["request_id"])
+        ctx = state["context"]
+        screen = {"module": ctx.ui.module, "form": ctx.ui.form, "field": ctx.ui.field,
+                  "record_type": ctx.record.record_type, "has_selected_record": bool(ctx.record.record_id)}
+        analysis = analyze_message(state["query"], state.get("history") or [], state["request_id"], screen=screen)
         update: dict = {"conversation": analysis, "followup_resolved": analysis.followup_resolved}
         if analysis.is_small_talk:
             # Pure small talk needs no scope check, search or paid classifier call.
@@ -489,7 +511,9 @@ class ChatOrchestrator:
 
     @staticmethod
     def _classification_node(state: ChatWorkflowState) -> dict:
-        classification = classify_and_route(state["transformed"], state["context"])
+        conversation = state.get("conversation")
+        precomputed = conversation.classification if conversation and settings.combined_understanding else None
+        classification = classify_and_route(state["transformed"], state["context"], precomputed=precomputed)
         mood = _user_mood(state, classification.emotion)
         if mood != classification.emotion:
             log_event(logger, "user_mood_adjusted", request_id=state["request_id"],
@@ -755,10 +779,14 @@ class ChatOrchestrator:
             if transformed.terminology_query and not transformed.subqueries and _ABBREVIATION.search(question)
             else None
         )
+        classification = state.get("classification")
+        brief = not transformed.subqueries and is_definition_question(
+            question, getattr(classification, "operation", None))
         trace.detail(f"▸ write the answer from the {len(chunks)} evidence item(s) — tone for mood {mood.value}"
+                     + (" · length: short (simple definition question)" if brief else "")
                      + (f" · SyteLine-terms hint {trace.text(terminology, 100)}" if terminology else ""))
         try:
-            answer = generate_answer(question, chunks, tone=style, terminology=terminology)
+            answer = generate_answer(question, chunks, tone=style, terminology=terminology, brief=brief)
         except Exception:
             logger.exception("event=answer_generation_failed request_id=%s", state["request_id"])
             raise
@@ -770,7 +798,7 @@ class ChatOrchestrator:
             chunks,
             request_id=state["request_id"],
             regenerate=lambda claims: generate_answer(question, chunks, avoid_claims=claims, tone=style,
-                                                      terminology=terminology),
+                                                      terminology=terminology, brief=brief),
         )
         source_labels = [f"{chunk.source_file} — {chunk.full_context_path}" for chunk in chunks]
         used = sorted(set(sources))

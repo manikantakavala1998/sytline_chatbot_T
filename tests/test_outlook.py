@@ -47,7 +47,7 @@ def test_ticket_mail_subject_recipients_and_escaping():
     assert mail.to == ["support@example.com", "helpdesk@example.com"]
     assert "<script>" not in mail.html_body and "&lt;script&gt;" in mail.html_body  # user text can't inject HTML
     assert "CO1001 &amp; CO1002" in mail.html_body
-    assert "Same problem came back" in mail.html_body and "Customer Orders" in mail.html_body
+    assert "The same problem came back" in mail.html_body and "Customer Orders" in mail.html_body
     assert "CO1001 & CO1002 blocked" in mail.text_body
 
 
@@ -64,17 +64,32 @@ def test_ticket_mail_uses_plain_words_and_outlook_safe_layout(monkeypatch):
     body = mail.html_body
     # support staff see plain words, never internal route or mood codes
     assert "Answered from documents" in body and "Not found in documents" in body
-    assert "MARKDOWN_RAG_RESPONSE" not in body and "Persistent (asked again)" in body and "F4_" not in body
+    assert "MARKDOWN_RAG_RESPONSE" not in body and "F4_" not in body
     assert "Open &lt;b&gt;it&lt;/b&gt;" in body  # the assistant's answer is escaped too
     # table layout, no web-only CSS that Outlook for Windows drops
     assert body.count("<table") >= 3 and "display:flex" not in body and "display:grid" not in body
-    assert "Conversation before the ticket (2 questions)" in body
-    assert "2. it is still on hold — Not found in documents" in mail.text_body
-    assert "feedback console" in body and "href=" not in body  # no button without ADMIN_CONSOLE_URL
+    assert "The conversation" in body and "find this in the approved documents" in body
+    assert "User: it is still on hold\nAssistant (Not found in documents):" in mail.text_body
+    assert "support console" in body and "href=" not in body  # no button without ADMIN_CONSOLE_URL
 
     monkeypatch.setattr(settings, "admin_console_url", 'https://bot.example.com/admin.html?x="1"')
     body = outlook.ticket_mail(ticket).html_body
     assert 'href="https://bot.example.com/admin.html?x=&quot;1&quot;"' in body
+
+
+def test_ticket_mail_shows_the_real_problem_not_the_request_for_a_person():
+    turns = [{"question": "How do I reprint an invoice for a customer?", "outcome": "NO_ANSWER", "answer": "Not found."},
+             {"question": "I can't find the reprint option, can I talk to someone from support?",
+              "outcome": "DIRECT_RESPONSE", "answer": "Sure — I can raise a ticket."}]
+    old_ticket = {**TICKET, "priority": "normal", "trigger": "user_request", "user_display_name": "Demo User (AR_CLERK)",
+                  "user_id": "demo.ar_clerk", "issue_summary": turns[1]["question"], "conversation_summary": turns}
+    mail = outlook.ticket_mail(old_ticket)
+    assert "How do I reprint an invoice for a customer?" in mail.subject
+    assert "The user asked to talk to the support team." in mail.html_body
+    assert "(AR_CLERK) (demo.ar_clerk)" not in mail.html_body  # no doubled brackets
+    assert mail.html_body.count("Small talk") == 0  # no tag on the request for a person
+    from backend.app.escalation.policy import main_issue
+    assert main_issue(turns)["question"] == "How do I reprint an invoice for a customer?"
 
 
 def test_security_mail():

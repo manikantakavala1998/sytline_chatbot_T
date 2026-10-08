@@ -85,7 +85,10 @@ def init_history_store() -> bool:
     """Open the pool and create the tables. Returns False (and logs) if Postgres is unreachable."""
     global _pool, _available
     try:
-        _pool = ConnectionPool(_conninfo(), min_size=1, max_size=5, open=True, timeout=5)
+        # Shared by chat history, tickets, feedback and the audit trail; every parallel question
+        # needs a connection for a moment, so the pool must cover the expected concurrent users.
+        _pool = ConnectionPool(_conninfo(), min_size=1, max_size=settings.postgres_pool_max_size, open=True,
+                               timeout=10)
         with _pool.connection() as conn:
             conn.execute(SCHEMA_SQL)
         _available = True

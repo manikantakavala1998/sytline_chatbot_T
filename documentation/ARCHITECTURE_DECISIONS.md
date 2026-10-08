@@ -292,6 +292,40 @@ self-audited purge after 365 days. Monitoring reads the same table — no separa
 
 ---
 
+### 19. One server process, questions answered in parallel on worker threads (2026-09-30)
+**Decision: `/chat` runs on FastAPI's worker threads (plain `def`), in one server process that holds
+one copy of the embedding model; the database pool is sized for the concurrent users.**
+
+- Why: as `async def` with blocking work inside (OpenAI, Milvus, Postgres), the event loop answered
+  one question at a time — 6 users waited 47 s each and the whole server (console, `/health`) froze.
+  After the change 12 parallel users were all answered within 17 s with nothing mixed or lost.
+- Why threads, not more processes yet: almost all the time per question is waiting on OpenAI, and
+  waiting threads cost nothing; each extra process would load another ~1.6 GB embedding model.
+- Per-request state (step trace, cost meter) lives in context variables, so parallel questions never
+  share it; each trace line carries its request tag.
+- Later (Phase 8, scale-out): several processes (`uvicorn --workers N`, without `reload`) or several
+  servers behind a load balancer. Before that, the health-monitor loop must run in one process only,
+  otherwise each process would raise the same alert.
+
+---
+
+### 20. One OpenAI call understands and classifies the question (2026-10-08)
+**Decision: the understanding call also returns the routing classification (`COMBINED_UNDERSTANDING`,
+on by default). The separate classifier call still runs whenever that result is missing, invalid, or
+reads a command as a question.**
+
+- Why: each question made 4–5 OpenAI calls one after another; understanding and classification used
+  the same small model on the same message. Merging them saves one wait (~1 s).
+- Why it is safe: both paths share the same rules text (`router.CLASSIFIER_RULES`); code still decides
+  the final route; the switch goes back to two calls with one `.env` line.
+- Measured with `scripts/eval_understanding.py` (56 questions, real OpenAI): 52/54 → 54/54 correct,
+  understand + classify 2.6 s → 1.6 s, OpenAI calls per question 3.6 → 2.7, cost about the same.
+- The first run failed two commands ("Create a new customer order…", "Open the customer orders
+  form"), so commands are re-checked; it also exposed an unstable scope check on "credit memo",
+  fixed separately (more business terms, clearer scope prompt).
+
+---
+
 ## Still open — `[NEEDS SYTELINE CONFIRMATION]`
 
 Carried forward from master prompt §73, unresolved by the flowcharts or the login URL:

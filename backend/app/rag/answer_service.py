@@ -35,13 +35,22 @@ names, or numbers that are not stated in the context.
 
 If the context does not contain the answer, say so plainly rather than guessing.
 
-Keep the answer concise and direct. Use a numbered list for step-by-step instructions. \
-Do not mention "the context" or "the documents" out loud — just answer naturally, as if you \
-already knew this.
+Keep the answer concise and direct. Answer only what was asked: do not add related topics, \
+other modules or extra background the user did not ask about. Use a numbered list for \
+step-by-step instructions. Do not mention "the context" or "the documents" out loud — just \
+answer naturally, as if you already knew this.
 
 Be polite and professional, like a helpful colleague — never curt or robotic. If the answer \
 isn't in the context, say so courteously and suggest what the user could ask instead, rather \
 than a flat refusal."""
+
+# Added for simple "what is X?" questions: users want the definition, not everything around it.
+BRIEF_INSTRUCTION = (
+    "This is a simple definition question. Reply in one or two short sentences (about 40 words at "
+    "most): say what it is in SyteLine and, if the context names it, the form where it is kept. No "
+    "steps, no lists, no related processes. If the context has no clear definition, say so in one "
+    "sentence and name the closest topic you can explain instead."
+)
 
 
 def build_context(chunks: list[MarkdownChunk]) -> str:
@@ -56,14 +65,18 @@ def generate_answer(
     avoid_claims: list[str] | None = None,
     tone: str | None = None,
     terminology: str | None = None,
+    brief: bool = False,
 ) -> str:
     """`avoid_claims`: statements the answer validator found unsupported in an earlier draft.
     `tone`: style guidance for the user's mood (quality/tone.py) — never changes the facts.
     `terminology`: the same question in SyteLine terms ("What is SO?" -> "What is a sales order
     (SO)? Customer Order"), so abbreviations and slang are understood; the reply still answers
-    the user's own wording."""
+    the user's own wording.
+    `brief`: a simple definition question ("What is a customer?") — answer in one or two sentences."""
     context = build_context(chunks)
     system = SYSTEM_PROMPT
+    if brief:
+        system += f"\n\nAnswer length: {BRIEF_INSTRUCTION}"
     if tone:
         system += f"\n\nTone for this reply (style only — the rules above still come first): {tone}"
     question = f"Question: {query}"

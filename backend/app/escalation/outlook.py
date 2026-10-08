@@ -23,6 +23,7 @@ from email.utils import formataddr
 import httpx
 
 from backend.app.config import settings
+from backend.app.escalation.policy import is_ticket_request, main_issue
 from backend.app.utils.logger import get_logger, log_event
 
 logger = get_logger(__name__)
@@ -32,13 +33,6 @@ TOKEN_URL = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
 SEND_URL = "https://graph.microsoft.com/v1.0/users/{sender}/sendMail"
 SUBJECT_ISSUE_CHARS = 80
 
-TRIGGER_TEXT = {
-    "frustration": "User was frustrated",
-    "persistent": "Same problem came back",
-    "unresolved": "Two answers in a row could not resolve it",
-    "user_request": "User asked for a person / a ticket",
-    "user_confirmed": "User raised it",
-}
 
 
 class OutlookNotConfigured(RuntimeError):
@@ -90,12 +84,12 @@ def missing_settings(for_security: bool = False, kind: str | None = None) -> lis
 INK, SOFT, FAINT, BORDER, CANVAS, PANEL = "#1e2338", "#5b6088", "#7a7f9e", "#dde3f0", "#f4f7fc", "#f7f9fd"
 BRAND = "#1c4fd6"
 FONT = "'Segoe UI',Segoe,Arial,sans-serif"
-BADGE = {  # (text colour, background) — always shown with a word, never colour alone
-    "critical": ("#ffffff", "#b52e2e"),
-    "warning": ("#5c3b00", "#fde3a7"),
-    "good": ("#ffffff", "#0c7d0c"),
-    "neutral": (INK, "#e3e8f5"),
-    "on_brand": (BRAND, "#ffffff"),
+BADGE = {  # (text colour, background) — soft tints, always with a word, never colour alone
+    "critical": ("#b3261e", "#fdecea"),
+    "warning": ("#8a5a00", "#fff4dc"),
+    "good": ("#0f7a2e", "#e8f6ec"),
+    "neutral": ("#555b78", "#f1f4f9"),
+    "on_brand": ("#1f58cc", "#eaf1fe"),
 }
 OUTCOME_TEXT = {
     "FAST_QA_RESPONSE": ("Approved answer given", "good"),
@@ -105,10 +99,6 @@ OUTCOME_TEXT = {
     "CAPABILITY_PENDING": ("Needs live SyteLine data", "warning"),
     "OUT_OF_SCOPE": ("Outside Prospect-to-Cash", "neutral"),
     "DIRECT_RESPONSE": ("Small talk", "neutral"),
-}
-MOOD_TEXT = {
-    "F0_NORMAL": "Calm", "F1_CONFUSED": "Confused", "F2_COMPLAINT": "Complaining",
-    "F3_FRUSTRATED": "Frustrated", "F4_PERSISTENT": "Persistent (asked again)",
 }
 
 
@@ -138,8 +128,8 @@ def _badge(text: str, kind: str = "neutral") -> str:
 
 def _section(title: str, inner: str) -> str:
     return (f'<tr><td style="padding:20px 28px 0 28px">'
-            f'<div style="font-size:12px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;'
-            f'color:{FAINT};padding-bottom:8px">{_e(title)}</div>{inner}</td></tr>')
+            f'<div style="font-size:13px;font-weight:bold;color:{SOFT};padding-bottom:8px">{_e(title)}</div>'
+            f"{inner}</td></tr>")
 
 
 def _facts(pairs: list[tuple[str, str | None]]) -> str:
@@ -175,9 +165,10 @@ def _layout(*, preheader: str, eyebrow: str, title: str, badges: str, body_rows:
 <tr><td align="center" style="padding:24px 12px">
 <table role="presentation" width="640" cellpadding="0" cellspacing="0" border="0" bgcolor="#ffffff"
  style="width:100%;max-width:640px;background:#ffffff;border:1px solid {BORDER};border-radius:12px;font-family:{FONT};color:{INK}">
-<tr><td bgcolor="{band}" style="background:{band};padding:22px 28px;border-radius:12px 12px 0 0">
-<div style="font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:#dbe5ff">{_e(eyebrow)}</div>
-<div style="font-size:24px;font-weight:bold;color:#ffffff;padding:4px 0 10px">{_e(title)}</div>
+<tr><td bgcolor="{band}" height="4" style="background:{band};height:4px;line-height:4px;font-size:4px;border-radius:12px 12px 0 0">&nbsp;</td></tr>
+<tr><td style="padding:20px 28px 16px 28px;border-bottom:1px solid {BORDER}">
+<div style="font-size:12px;color:{FAINT}">{_e(eyebrow)}</div>
+<div style="font-size:22px;font-weight:bold;color:{INK};padding:2px 0 8px">{_e(title)}</div>
 <div>{badges}</div></td></tr>
 {body_rows}
 <tr><td style="padding:24px 28px 22px 28px">
@@ -196,7 +187,7 @@ def _wrap(title: str, intro: str, table: str, footer: str, *, eyebrow: str = "Sy
     body = (f'<tr><td style="padding:22px 28px 0 28px;font-size:14px;line-height:21px;color:{SOFT}">{_e(intro)}</td></tr>'
             f'<tr><td style="padding:12px 28px 0 28px">{table}</td></tr>')
     if settings.admin_console_url:
-        body += _button("Open the feedback console", settings.admin_console_url)
+        body += _button("Open the support console", settings.admin_console_url)
     return _layout(preheader=intro, eyebrow=eyebrow, title=title, badges=badges, body_rows=body, footer=footer,
                    band=band)
 
@@ -205,90 +196,117 @@ def _screen(item: dict) -> str:
     return " / ".join(p for p in (item.get("site"), item.get("module"), item.get("form")) if p)
 
 
+# Why the ticket exists and how far the assistant got — one plain sentence each.
+TRIGGER_SENTENCE = {
+    "user_request": "The user asked to talk to the support team.",
+    "user_confirmed": "The user asked for a support ticket.",
+    "persistent": "The same problem came back after the assistant's answer.",
+    "frustration": "The user was frustrated with the answers.",
+    "unresolved": "The assistant couldn't answer two questions in a row.",
+}
+RESULT_SENTENCE = {
+    "NO_ANSWER": "The assistant couldn't find this in the approved documents.",
+    "CLARIFY": "The assistant needed more details and couldn't solve it.",
+    "MARKDOWN_RAG_RESPONSE": "The assistant answered from the documents, but that didn't solve the problem.",
+    "FAST_QA_RESPONSE": "The assistant gave the approved answer, but that didn't solve the problem.",
+    "CAPABILITY_PENDING": "It needs live SyteLine data, which the assistant can't read yet.",
+    "OUT_OF_SCOPE": "It is outside what the assistant covers.",
+}
+CHAT_OUTCOMES = {k: v for k, v in OUTCOME_TEXT.items() if k != "DIRECT_RESPONSE"}  # no tag on small talk
+
+
 def _conversation(turns: list[dict]) -> tuple[str, str]:
-    """The turns before the ticket: question, what the assistant did, and the start of its answer."""
+    """The chat before the ticket, written as a chat: the user's message, then the assistant's
+    reply with a small tag saying how it answered."""
     html_turns, text_turns = [], []
-    for number, turn in enumerate(turns, 1):
-        outcome, kind = OUTCOME_TEXT.get(turn.get("outcome"), (turn.get("outcome") or "", "neutral"))
-        answer = turn.get("answer")
+    for turn in turns:
+        outcome = CHAT_OUTCOMES.get(turn.get("outcome"))
+        answer = turn.get("answer") or ""
+        tag = f" &nbsp;{_badge(outcome[0], outcome[1])}" if outcome else ""
         html_turns.append(
-            f'<tr><td width="28" style="vertical-align:top;padding:10px 0;color:{FAINT};font-size:13px;'
-            f'font-weight:bold">{number}.</td><td style="vertical-align:top;padding:10px 0;'
-            f'border-bottom:1px solid {BORDER}">'
-            f'<div style="font-size:14px;font-weight:bold;color:{INK};padding-bottom:6px">{_e(turn.get("question"))}</div>'
-            f'<div style="padding-bottom:{6 if answer else 0}px">{_badge(outcome, kind)}</div>'
-            + (f'<div style="font-size:13px;line-height:19px;color:{SOFT}">{_e(answer)}</div>' if answer else "")
-            + "</td></tr>"
+            f'<tr><td style="padding:12px 0;border-bottom:1px solid {BORDER}">'
+            f'<div style="font-size:12px;font-weight:bold;color:{FAINT};padding-bottom:2px">User</div>'
+            f'<div style="font-size:14px;line-height:21px;color:{INK};padding-bottom:10px">{_e(turn.get("question"))}</div>'
+            f'<div style="font-size:12px;font-weight:bold;color:{FAINT};padding-bottom:2px">Assistant{tag}</div>'
+            f'<div style="font-size:13px;line-height:20px;color:{SOFT}">{_e(answer) or "—"}</div>'
+            "</td></tr>"
         )
-        text_turns.append(f"{number}. {turn.get('question')} — {outcome}" + (f"\n   {answer}" if answer else ""))
+        label = f" ({outcome[0]})" if outcome else ""
+        text_turns.append(f"User: {turn.get('question')}\nAssistant{label}: {answer}")
     table = f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">{"".join(html_turns)}</table>'
-    return table, "\n".join(text_turns)
+    return table, "\n\n".join(text_turns)
+
+
+def _panel(inner: str) -> str:
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">'
+            f'<tr><td bgcolor="{PANEL}" style="background:{PANEL};border:1px solid {BORDER};border-radius:10px;'
+            f'padding:14px 16px">{inner}</td></tr></table>')
 
 
 def ticket_mail(ticket: dict) -> Mail:
     ref = ticket["ticket_ref"]
-    issue = ticket.get("issue_summary") or "Support request"
+    turns = ticket.get("conversation_summary") or []
+    issue_turn = main_issue(turns)
+    issue = ticket.get("issue_summary") or ""
+    if not issue or is_ticket_request(issue):  # older tickets stored "can I talk to support?" as the issue
+        issue = (issue_turn or {}).get("question") or issue or "Support request"
     short = issue if len(issue) <= SUBJECT_ISSUE_CHARS else issue[:SUBJECT_ISSUE_CHARS] + "…"
     high = ticket.get("priority") == "high"
     priority = "HIGH" if high else "Normal"
     subject = f"[{ref}] {priority} priority — {short}"
     who = ticket.get("user_display_name") or ticket["user_id"]
-    user = f"{who} ({ticket['user_id']})" if who != ticket["user_id"] else who
-    reason = TRIGGER_TEXT.get(ticket.get("trigger"), ticket.get("trigger"))
-    mood = MOOD_TEXT.get(ticket.get("mood") or "", ticket.get("mood"))
+    user_id = ticket["user_id"]
+    screen = _screen(ticket).replace(" / ", " › ")
     record = " ".join(p for p in (ticket.get("record_type"), ticket.get("record_id")) if p)
     created = _when(ticket.get("created_at"))
-    turns = ticket.get("conversation_summary") or []
+    why = " ".join(s for s in (TRIGGER_SENTENCE.get(ticket.get("trigger") or ""),
+                               RESULT_SENTENCE.get((issue_turn or {}).get("outcome") or "")) if s)
+    if high:
+        why += " Marked high priority because the problem is repeating or the user is frustrated."
 
     badges = " ".join([
-        _badge("▲ HIGH priority" if high else "Normal priority", "critical" if high else "on_brand"),
-        _badge("● Open", "on_brand"),
+        _badge("▲ High priority" if high else "Normal priority", "critical" if high else "neutral"),
+        _badge("Open", "on_brand"),
     ])
-    body = _section("What the user needs help with",
-                    f'<div style="font-size:18px;line-height:26px;font-weight:bold;color:{INK}">{_e(issue)}</div>')
+    who_html = f"{_e(who)}" + (f' <span style="color:{FAINT}">· {_e(user_id)}</span>' if who != user_id else "")
+    body = _section("Summary", _panel(
+        (f'<div style="font-size:14px;line-height:22px;color:{INK};padding-bottom:12px">{_e(why)}</div>' if why else "")
+        + _facts([("Who", who_html), ("Where", _e(screen)), ("Record", _e(record)), ("When", _e(created))])
+    ))
     if ticket.get("user_note"):
-        body += _section("User’s note",
-                         f'<div style="background:{PANEL};border-left:3px solid {BRAND};padding:10px 14px;'
-                         f'font-size:14px;line-height:21px;color:{INK}">“{_e(ticket["user_note"])}”</div>')
-    body += _section("Details", _facts([
-        ("Raised by", _e(user)),
-        ("Raised on", _e(created)),
-        ("SyteLine screen", _e(_screen(ticket))),
-        ("Record", _e(record)),
-        ("Why it was raised", _e(reason) if reason else None),
-        ("User’s mood", _e(mood) if mood else None),
-    ]))
+        body += _section("Note from the user",
+                         f'<div style="border-left:3px solid {BRAND};padding:4px 0 4px 14px;font-size:15px;'
+                         f'line-height:22px;color:{INK}">“{_e(ticket["user_note"])}”</div>')
     conversation_html, conversation_text = _conversation(turns)
     if turns:
-        body += _section(f"Conversation before the ticket ({len(turns)} question{'s' if len(turns) != 1 else ''})",
-                         conversation_html)
+        body += _section("The conversation", conversation_html)
     body += _section("What to do next",
                      f'<div style="font-size:14px;line-height:22px;color:{INK}">'
-                     f"1. Contact {_e(who)} about this issue.<br>"
-                     f"2. In the feedback console → <b>Tickets</b>, set {_e(ref)} to <b>In progress</b>, "
-                     f"then <b>Resolved</b> when it is fixed.</div>")
+                     f"1. Contact {_e(who)} about this problem.<br>"
+                     f"2. In the support console, open <b>Tickets</b>, press <b>Start working</b> on {_e(ref)}, "
+                     f"and <b>Mark resolved</b> once it is fixed.</div>")
     if settings.admin_console_url:
-        body += _button(f"Open {ref} in the feedback console", settings.admin_console_url)
-    footer = ("Sent automatically by the SyteLine Prospect-to-Cash assistant when the user confirmed the ticket. "
+        body += _button(f"Open {ref} in the support console", settings.admin_console_url)
+    footer = ("Sent automatically by the SyteLine Prospect-to-Cash assistant after the user confirmed the ticket. "
               "Passwords and other secrets in the conversation are masked.")
 
     text = "\n".join(line for line in [
         f"New support ticket {ref} — {priority} priority",
         "",
-        f"What the user needs help with: {issue}",
-        f"User's note: {ticket['user_note']}" if ticket.get("user_note") else None,
+        f"Problem: {issue}",
+        why or None,
         "",
-        f"Raised by: {user}",
-        f"Raised on: {created}" if created else None,
-        f"SyteLine screen: {_screen(ticket)}" if _screen(ticket) else None,
+        f"Who: {who}" + (f" ({user_id})" if who != user_id else ""),
+        f"Where: {screen}" if screen else None,
         f"Record: {record}" if record else None,
-        f"Why it was raised: {reason}" if reason else None,
-        f"User's mood: {mood}" if mood else None,
+        f"When: {created}" if created else None,
         "",
-        "Conversation before the ticket:" if turns else None,
+        f"Note from the user: {ticket['user_note']}" if ticket.get("user_note") else None,
+        "",
+        "The conversation:" if turns else None,
         conversation_text if turns else None,
         "",
-        f"Next: contact {who}, then set {ref} to In progress / Resolved in the feedback console (Tickets tab).",
+        f"Next: contact {who}, then in the support console press Start working on {ref} and Mark resolved once fixed.",
         settings.admin_console_url or None,
         "",
         footer,
@@ -296,8 +314,8 @@ def ticket_mail(ticket: dict) -> Mail:
     return Mail(
         to=recipients(settings.support_ticket_email),
         subject=subject,
-        html_body=_layout(preheader=f"{who} · {_screen(ticket) or 'SyteLine'} · {short}",
-                          eyebrow="SyteLine assistant · New support ticket", title=ref, badges=badges,
+        html_body=_layout(preheader=f"{who} · {screen or 'SyteLine'} · {short}",
+                          eyebrow=f"New support ticket · {ref}", title=issue, badges=badges,
                           body_rows=body, footer=footer),
         text_body=text,
     )
@@ -316,7 +334,7 @@ def security_mail(event: dict) -> Mail:
         ("Time", _when(event.get("created_at"))),
     ])
     footer = ("The messages were blocked and nothing was revealed. A redacted excerpt of each attempt is in the "
-              "feedback console (Security tab).")
+              "support console (Security).")
     high = event["severity"] == "high"
     return Mail(
         to=recipients(settings.security_alert_email),
@@ -340,7 +358,7 @@ def health_mail(alert: dict) -> Mail:
         ("Raised", _when(alert.get("raised_at"))),
         ("Resolved", _when(alert.get("resolved_at"))),
     ])
-    footer = "Open the feedback console → Health tab for the numbers behind this alert."
+    footer = "Open the support console → System health for the numbers behind this alert."
     return Mail(to=recipients(settings.ops_alert_email), subject=subject,
                 html_body=_wrap(state.title(), "The assistant's automatic health check changed state.", table, footer,
                                 eyebrow="SyteLine assistant · Health", band="#0c6b0c" if resolved else "#8a5a00"),
