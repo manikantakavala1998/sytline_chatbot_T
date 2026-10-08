@@ -63,6 +63,7 @@ QA_REQUIRED = ["qa_id", "module", "canonical_question", "answer", "keywords", "i
 VARIATION_COLUMNS = ["qa_id", "variation_id", "question_variation", "language", "source", "validated"]
 GLOSSARY_COLUMNS = ["canonical_term", "synonyms", "abbreviation", "module", "process"]
 APPROVAL = {"DRAFT", "IN_REVIEW", "APPROVED", "REJECTED"}
+USER_AUTHORIZED_APPROVAL = "User-authorized automatic approval (SME review pending)"
 ROUTES = {"FAST_QA", "MARKDOWN_RAG"}
 QA_INTENTS = {i.value for i in IntentLabel}
 QA_ID = re.compile(r"^[A-Z]{2,5}-\d{3,6}$")
@@ -250,6 +251,7 @@ def check_excel(path: Path) -> Report:
         report.error(f"qa_master: qa_id {dup} is used more than once")
 
     usable = 0
+    user_authorized = 0
     for index, row in qa.iterrows():
         where = f"qa_master row {index + 2} ({row['qa_id']})"
         for column in QA_REQUIRED:
@@ -271,7 +273,9 @@ def check_excel(path: Path) -> Report:
             report.warn(f"{where}: module '{row['module']}' differs from the file name '{path.stem}'")
         if status == "APPROVED":
             reviewer = str(row["approved_by"]) if not _blank(row["approved_by"]) else ""
-            if not reviewer or "pending" in reviewer.lower() or "auto" in reviewer.lower():
+            if reviewer == USER_AUTHORIZED_APPROVAL:
+                user_authorized += 1
+            elif not reviewer or "pending" in reviewer.lower() or "auto" in reviewer.lower():
                 report.error(f"{where}: APPROVED but approved_by is '{reviewer or 'empty'}' — a real reviewer "
                              "name is required")
             if _blank(row["effective_date"]):
@@ -330,6 +334,9 @@ def check_excel(path: Path) -> Report:
                     report.warn(f"glossary row {index + 2}: separate synonyms with | not commas")
             report.info.append(f"→ glossary: {len(glossary)} term(s)")
 
+    if user_authorized:
+        report.warn(f"{user_authorized} APPROVED row(s) were activated by user request, not SyteLine SME review; "
+                    "verify against the deployed version and site before production reliance")
     report.info.append(f"→ {len(qa)} Q&A row(s): {usable} will be used (APPROVED + active); "
                        f"{len(variations)} variation(s)")
     return report

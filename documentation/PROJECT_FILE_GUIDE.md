@@ -223,6 +223,96 @@ The generated starter rows use a placeholder `PTC Training Guide` source. The lo
 that source even though older workbook copies carry an APPROVED flag; newly generated samples use
 DRAFT. Review and replace them with real sourced Q&A before enabling Fast Q&A content.
 
+**2026-09-30 Prospect expansion:** `prospect.xlsx` has 177 canonical Q&A rows (7 existing plus
+170 new) and 531 question variations across the prospect record and its linked contacts,
+interactions, leads, opportunities, estimates, and conversion. The new 170 rows are `IN_REVIEW`
+and inactive pending a named SyteLine business reviewer; they are present in the workbook but are
+not yet loaded into Fast Q&A or the shared vector collection. The seven older approved rows retain
+their pre-existing pending-review metadata, which the validator flags. See
+`PROSPECT_TO_CASH_KNOWLEDGE_BASE.md` for scope and release conditions.
+
+**2026-10-08 Customer expansion:** `customer.xlsx` has 169 canonical Q&A rows: eight refreshed
+legacy rows and 161 new, source-grounded rows. All rows are `IN_REVIEW` and inactive until
+the SyteLine SME checks this site's forms, permissions, and terminology. The eight legacy rows
+had an auto-derived approval label without SME review; their status has been corrected. There are 507
+question-variation rows, which are not counted as additional canonical Q&A. The paired
+`customer.md` article now includes screen-level customer, ship-to, credit, contact, multi-site,
+and first-order checks. Run `scripts/build_customer_qa.mjs` to rebuild only this workbook; the
+all-module generator overwrites other Q&A files and should not be used for this incremental work.
+
+**2026-10-08 Customer Orders expansion:** `customer_order.xlsx` has 159 canonical Q&A rows:
+150 new header/screen-level questions and nine refreshed legacy rows. All are `IN_REVIEW`
+and inactive until local SyteLine SME approval; 477 variation rows are additional wording,
+not distinct canonical questions. The paired `customer_order.md` has 30 searchable sections
+based on general Infor CSI/SyteLine Customer Service guidance. Run
+`scripts/build_customer_order_qa.mjs` to rebuild only this workbook.
+
+**2026-10-08 Customer Order Lines expansion and source correction:** `customer_order_line.xlsx`
+has 170 canonical Q&A rows: 160 line/release questions rebuilt from 32 sections of
+`customer_order_line.md` using only the official Infor SyteLine Customer Service User Guide
+release 9.01.x, plus 10 preserved legacy rows not yet re-audited as manual-only. Each rebuilt
+Q&A row gives printed User Guide pages in its version/source field. The 510 variation rows are
+alternative wordings, not distinct canonical questions. All 170 canonical rows are `IN_REVIEW`
+and inactive pending local SyteLine SME approval. `scripts/build_customer_order_line_qa.mjs`
+rebuilds this workbook only. No reindex or application restart was performed. Customer and
+Customer Orders predate the manual-only instruction and require a separate source audit.
+
+**PDF distinction:** `scripts/build_customer_to_cash_pdfs.py` renders Markdown review copies
+under `output/pdf/`. These are not the original Infor manual and should not be cited as source.
+The original source for future expansion is the *Infor SyteLine Customer Service User Guide*,
+release 9.01.x (2020).
+
+**2026-10-08 Pricing expansion:** `pricing.md` now contains 33 form- and procedure-level
+sections with 165 distinct Q&A facts derived only from the 9.01.x Customer Service User
+Guide, printed pages 35, 37-38, 50-52, 66-68, and 101-108. `pricing.xlsx` has 172
+canonical Q&A rows: 165 newly rebuilt Pricing questions and seven legacy rows not yet
+re-audited as manual-only, plus 516 wording variations. Every canonical row is now
+`IN_REVIEW` and inactive until local SyteLine SME approval. The new rows have printed-page
+provenance in the version/source field. `scripts/build_pricing_qa.mjs` rebuilds only the
+Pricing workbook. No reindex or application restart was performed.
+
+**2026-10-08 Credit expansion:** `credit.md` now contains 31 form- and procedure-level
+topics and 155 distinct Q&A entries derived only from the original Infor SyteLine Customer
+Service User Guide 9.01.x, printed pages 33 and 96-101. It distinguishes customer and order
+hold state, line-entry status, EDI credit handling, multi-site behavior, authorization,
+and the Order Credit Hold Change Utility. `credit.xlsx` has 163 canonical Q&A rows: 155
+new manual-grounded questions and eight preserved legacy rows not yet re-audited as
+manual-only. Its 489 variations are alternative wordings, not additional canonical
+questions. At the user's request, every row is `APPROVED` and active for Q&A loading,
+with `approved_by` explicitly set to `User-authorized automatic approval (SME review
+pending)`. This is not SyteLine SME validation, especially for the preserved legacy
+rows; the new rows carry printed-page provenance. `scripts/build_credit_qa.mjs`
+preserves this status on rebuild. No reindex or application restart was performed.
+
+**2026-10-08 Shipment expansion:** `shipment.md` now contains 31 form- and procedure-level
+topics and 155 distinct Q&A entries derived only from the original Infor SyteLine Customer
+Service User Guide 9.01.x, printed pages 27-31, 33, 53-61, 69-71, and 132-142. It
+separates standard Order Shipping from the pick-pack-ship route, and covers approval,
+stock, reservations, tracked items, site/warehouse selection, DIFOT, freight, and invoice
+handoff. A conflict between the guide's no-unship warning and its later Unship Shipment
+procedure is flagged for deployed-release review. `shipment.xlsx` has 161 canonical Q&A
+rows: 155 new guide-grounded questions and six preserved legacy rows not re-audited as
+manual-only. Its 483 variations are alternative wordings, not additional questions.
+All rows are `APPROVED` and active by user-authorized automatic approval, with SME
+review still pending; the preserved legacy rows remain not re-audited. `scripts/build_shipment_qa.mjs`
+preserves this status on rebuild. No reindex or application restart was performed.
+The same user-authorized approval metadata is used for the subsequently prepared
+Invoice and Payment workbooks; it does not constitute production sign-off.
+
+**2026-10-08 Invoice and Payment expansion:** `invoice.md` contains 31 topics and 155
+new questions based on the official Infor SyteLine Customer Service User Guide 9.01.x,
+printed pages 27-32, 44-47, and 85-94. `invoice.xlsx` has 160 canonical rows (five
+refreshed legacy rows included) and 480 alternative wordings. `payment.md` contains
+33 topics and 165 new questions based on the user-authorized official Infor SyteLine
+Financials User Guide 9.01.x, printed pages 113-118, 131-143, 147-155, and 161-167,
+with the Customer Service guide for the invoice-to-A/R handoff. `payment.xlsx` has
+173 canonical rows (eight refreshed legacy rows included) and 519 alternative
+wordings. `scripts/build_invoice_payment_qa.mjs invoice` and `... payment` update
+one workbook at a time. All these rows are `APPROVED`/active by user request and
+explicitly say SME review is pending. No reindex or application restart was done.
+The eight planned detailed Customer-to-Cash modules are prepared; deployment-specific
+accuracy, permissions, and SME review remain separate work.
+
 **Status discrepancy to resolve separately:** A read-only test of existing Prospect,
 Customer, Customer Orders, Customer Order Lines, and Pricing workbooks during the Credit
 pass found `APPROVED`/active entries, although the earlier entries above describe an
@@ -254,7 +344,9 @@ e-mail addresses / phone numbers (dates excluded) / passwords / keys, duplicate 
 Section Summary or Keywords, sections too long or empty — then a preview of exactly how the file
 will be split into searchable sections. **Excel**: sheets and columns the loader reads, unique
 `qa_id`s, required cells, allowed values (approval_status, route, intent, active), APPROVED rows
-need a real `approved_by` (not "AUTO-DERIVED … pending") and an effective date, answer length,
+need either a real reviewer or the exact user-authorized automatic-approval marker
+(which triggers a non-SME-review warning), plus an effective date; other pending/auto-derived
+placeholders remain errors. It also checks answer length,
 questions ending with "?", the `source_reference` file exists, variations point at real rows (at
 least 3 each, no duplicates), glossary synonyms separated with `|`. Repeated row problems are
 grouped into one line.
